@@ -9,6 +9,45 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use crate::domain::Domain;
 use crate::multicore::*;
 
+#[cfg(feature = "count-msm")]
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Number of times `mul` has been called since last reset.
+#[cfg(feature = "count-msm")]
+pub static MSM_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of scalar elements passed across all `mul` calls since last reset.
+#[cfg(feature = "count-msm")]
+pub static MSM_TOTAL_ELEMENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Size of the most recent `mul` call.
+#[cfg(feature = "count-msm")]
+pub static MSM_LAST_N: AtomicU64 = AtomicU64::new(0);
+
+/// Simple histogram of MSM sizes. Records each call's element count.
+#[cfg(feature = "count-msm")]
+pub mod msm_histogram {
+    use alloc::vec::Vec;
+    use spin::Mutex;
+
+    static SIZES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+    /// Record an MSM invocation with `n` elements.
+    pub fn record(n: usize) {
+        SIZES.lock().push(n);
+    }
+
+    /// Clear all recorded sizes.
+    pub fn reset() {
+        SIZES.lock().clear();
+    }
+
+    /// Drain and return all recorded sizes.
+    pub fn drain() -> Vec<usize> {
+        core::mem::take(&mut *SIZES.lock())
+    }
+}
+
 /// Returns the low 64 bits of a [`PrimeField`] element's canonical
 /// little-endian representation.
 ///
@@ -198,6 +237,15 @@ where
     B::IntoIter: Clone + Sync,
 {
     let coeffs: Vec<_> = coeffs.into_iter().map(|a| a.to_repr()).collect();
+
+    #[cfg(feature = "count-msm")]
+    {
+        MSM_CALL_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        MSM_TOTAL_ELEMENTS.fetch_add(coeffs.len() as u64, core::sync::atomic::Ordering::Relaxed);
+        MSM_LAST_N.store(coeffs.len() as u64, core::sync::atomic::Ordering::Relaxed);
+        // Record size in histogram bucket.
+        msm_histogram::record(coeffs.len());
+    }
 
     let c = bucket_lookup(coeffs.len());
 

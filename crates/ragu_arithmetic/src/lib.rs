@@ -88,6 +88,8 @@ pub use pasta_curves::arithmetic::{Coordinates, CurveAffine, CurveExt};
 pub use util::{
     batch_to_affine, dot, eval, factor, factor_iter, geosum, low_u64, mul, poly_with_roots,
 };
+#[cfg(feature = "count-msm")]
+pub use util::{MSM_CALL_COUNT, MSM_LAST_N, MSM_TOTAL_ELEMENTS, msm_histogram};
 
 /// Converts a 256-bit integer literal into the little endian `[u64; 4]`
 /// representation that e.g. [`Fp::from_raw`](pasta_curves::Fp::from_raw) or
