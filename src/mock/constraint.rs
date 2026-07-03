@@ -73,11 +73,14 @@ pub fn conditional_enforce_equal<F: Field>(
 /// equal); returns `Err(Error::InvalidWitness(err))` where those constraints
 /// would be unsatisfiable (`a != b`).
 ///
-/// Note: the real `Point` gadget cannot represent the identity —
-/// `Point::alloc` and `Point::constant` reject points at infinity — so while
-/// this mock accepts `identity == identity`, callers using it as a `Point`
-/// mock must only pass non-identity points.
+/// An identity input errors instead, since real ragu cannot witness it as a
+/// `Point`.
 pub fn enforce_equal_point<C: Group>(a: C, b: C, err: &'static str) -> Result<()> {
+    if bool::from(a.is_identity()) || bool::from(b.is_identity()) {
+        return Err(Error::InvalidWitness(
+            "point at infinity cannot be witnessed".into(),
+        ));
+    }
     if a == b {
         Ok(())
     } else {

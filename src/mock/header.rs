@@ -2,6 +2,8 @@
 
 use alloc::vec::Vec;
 
+use ragu_pasta::{Ep, Eq, Fp, Fq};
+
 /// Number of internal header suffixes reserved by mock_ragu.
 ///
 /// Mirrors real ragu's `InternalStepIndex` layout:
@@ -63,7 +65,12 @@ impl Suffix {
 pub trait Header: Send + Sync + 'static {
     const SUFFIX: Suffix;
     type Data: Send + Clone;
-    fn encode(data: &Self::Data) -> Vec<u8>;
+
+    /// Decomposes header data into the in-circuit values it would carry, as
+    /// `(Fp elements, Fq elements, Pallas points, Vesta points)`. Pass points
+    /// as points, not coordinates: like real ragu's in-circuit `encode`, the
+    /// identity is rejected when these are hashed.
+    fn encode(data: &Self::Data) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>);
 }
 
 /// Trivial header for seed steps.
@@ -72,7 +79,7 @@ impl Header for () {
 
     const SUFFIX: Suffix = Suffix::internal(1);
 
-    fn encode(_data: &()) -> Vec<u8> {
-        Vec::new()
+    fn encode(_data: &()) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>) {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     }
 }

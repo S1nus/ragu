@@ -8,8 +8,11 @@
 //! polynomial-query opening claims and deriving Fiat-Shamir challenges.
 
 use blake2b_simd::Params;
-use ragu_arithmetic::{ff::FromUniformBytes as _, group::GroupEncoding as _};
-use ragu_core::Result;
+use ragu_arithmetic::{
+    ff::FromUniformBytes as _,
+    group::{Group as _, GroupEncoding as _},
+};
+use ragu_core::{Error, Result};
 use ragu_pasta::{Eq, Fp};
 
 use crate::hooks::FrameworkHooks;
@@ -27,11 +30,23 @@ impl<'a> StepCtx<'a> {
         Self { hooks }
     }
 
+    /// Records a polynomial-query opening claim. Errors if `com` is the
+    /// identity, which real ragu cannot witness as a commitment `Point`.
     pub fn enforce_poly_query(&mut self, com: Eq, x: Fp, y: Fp) -> Result<()> {
         self.hooks.enforce_polynomial_query(com, x, y)
     }
 
+    /// Derives a Fiat-Shamir challenge from `commitments`. Errors on an
+    /// identity commitment, which real ragu could not have absorbed as a
+    /// `Point`.
     pub fn derive_challenge(&mut self, commitments: &[Eq]) -> Result<Fp> {
+        for com in commitments {
+            if bool::from(com.is_identity()) {
+                return Err(Error::InvalidWitness(
+                    "point at infinity cannot be witnessed".into(),
+                ));
+            }
+        }
         let mut state = Params::new()
             .hash_length(CHALLENGE_LEN)
             .personal(b"MkRagu_Challng_\0")
