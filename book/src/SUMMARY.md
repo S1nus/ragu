@@ -46,6 +46,7 @@
     - [Staging](protocol/extensions/staging.md) <!-- todo -->
   - [Recursion]()
     - [Public Inputs](protocol/recursion/public_inputs.md) <!-- todo -->
+    - [Cross-Curve Binding](protocol/recursion/cross_curve.md)
   - [Analysis](protocol/analysis.md) <!-- todo -->
   - [Local (Sean's Corner!)]()
     - [Arithmetization](protocol/local/arithmetization.md)
