@@ -96,6 +96,9 @@ impl Application {
         let left_proof = left.proof;
         let right_proof = right.proof;
 
+        proof::compute_header_hash(S::Left::SUFFIX, &S::Left::encode(&left.data))?;
+        proof::compute_header_hash(S::Right::SUFFIX, &S::Right::encode(&right.data))?;
+
         let mut hooks = FrameworkHooks::new();
         let mut ctx = StepCtx::new(&mut hooks);
         let (output_data, aux) = step.witness(&mut ctx, witness, left.data, right.data)?;
@@ -111,7 +114,7 @@ impl Application {
         witness_data.extend_from_slice(left_bytes.as_ref());
         witness_data.extend_from_slice(right_bytes.as_ref());
 
-        let proof_value = Proof::new(S::Output::SUFFIX, S::INDEX, &encoded, &witness_data);
+        let proof_value = Proof::new(S::Output::SUFFIX, S::INDEX, &encoded, &witness_data)?;
         Ok((proof_value.carry::<S::Output>(output_data), aux))
     }
 
@@ -122,7 +125,7 @@ impl Application {
         }
 
         let encoded = H::encode(&pcd.data);
-        let expected_header_hash = proof::compute_header_hash(H::SUFFIX, &encoded);
+        let expected_header_hash = proof::compute_header_hash(H::SUFFIX, &encoded)?;
         if expected_header_hash != pcd.proof.header_hash {
             return Ok(false);
         }

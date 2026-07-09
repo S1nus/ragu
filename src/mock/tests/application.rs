@@ -1,7 +1,11 @@
 use alloc::vec::Vec;
 
-use ragu_arithmetic::rand::{SeedableRng as _, rngs::StdRng};
-use ragu_core::Result;
+use ragu_arithmetic::{
+    group::Group as _,
+    rand::{SeedableRng as _, rngs::StdRng},
+};
+use ragu_core::{Error, Result};
+use ragu_pasta::{Ep, Eq, Fp, Fq};
 
 use crate::{
     application::*,
@@ -23,9 +27,13 @@ impl Header for TestHeader {
 
     const SUFFIX: Suffix = Suffix::new(0);
 
-    fn encode(data: &Self::Data) -> Vec<u8> {
-        let bytes = data.value.to_le_bytes();
-        bytes.to_vec()
+    fn encode(data: &Self::Data) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>) {
+        (
+            alloc::vec![Fp::from(data.value)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 }
 
@@ -438,8 +446,13 @@ impl Header for ConflictingHeader {
 
     const SUFFIX: Suffix = Suffix::new(0);
 
-    fn encode(data: &Self::Data) -> Vec<u8> {
-        data.value.to_le_bytes().to_vec()
+    fn encode(data: &Self::Data) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>) {
+        (
+            alloc::vec![Fp::from(data.value)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 }
 
@@ -577,7 +590,8 @@ fn verify_rejects_unregistered_step_index() {
         Index::new(999),
         &encoded,
         b"unused-witness",
-    );
+    )
+    .expect("header without points hashes without error");
     let forged_pcd: Pcd<TestHeader> =
         forged_proof.carry::<TestHeader>(TestHeaderData { value: 42 });
 
@@ -598,8 +612,13 @@ fn verify_rejects_swapped_header_type() {
 
         const SUFFIX: Suffix = Suffix::new(99);
 
-        fn encode(data: &Self::Data) -> Vec<u8> {
-            data.value.to_le_bytes().to_vec()
+        fn encode(data: &Self::Data) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>) {
+            (
+                alloc::vec![Fp::from(data.value)],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
         }
     }
 
@@ -625,4 +644,157 @@ fn verify_rejects_swapped_header_type() {
         !valid,
         "proof bound to a different Header SUFFIX must fail verify"
     );
+}
+
+/// Header carrying a Vesta commitment point.
+struct PointHeader;
+
+#[derive(Clone, Debug)]
+struct PointHeaderData {
+    commitment: Eq,
+}
+
+impl Header for PointHeader {
+    type Data = PointHeaderData;
+
+    const SUFFIX: Suffix = Suffix::new(1);
+
+    fn encode(data: &Self::Data) -> (Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>) {
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            alloc::vec![data.commitment],
+        )
+    }
+}
+
+/// Seed step whose output header carries the witness point.
+struct PointSeedStep;
+
+impl Step for PointSeedStep {
+    type Aux<'source> = ();
+    type Left = ();
+    type Output = PointHeader;
+    type Right = ();
+    type Witness<'source> = Eq;
+
+    const INDEX: Index = Index::new(0);
+
+    fn witness<'source>(
+        &self,
+        _ctx: &mut StepCtx<'_>,
+        witness: Self::Witness<'source>,
+        _left: <Self::Left as Header>::Data,
+        _right: <Self::Right as Header>::Data,
+    ) -> Result<(<Self::Output as Header>::Data, Self::Aux<'source>)> {
+        Ok((
+            PointHeaderData {
+                commitment: witness,
+            },
+            (),
+        ))
+    }
+}
+
+/// Step consuming a [`PointHeader`] as its left input.
+struct PointConsumeStep;
+
+impl Step for PointConsumeStep {
+    type Aux<'source> = ();
+    type Left = PointHeader;
+    type Output = TestHeader;
+    type Right = ();
+    type Witness<'source> = ();
+
+    const INDEX: Index = Index::new(1);
+
+    fn witness<'source>(
+        &self,
+        _ctx: &mut StepCtx<'_>,
+        _witness: Self::Witness<'source>,
+        _left: <Self::Left as Header>::Data,
+        _right: <Self::Right as Header>::Data,
+    ) -> Result<(<Self::Output as Header>::Data, Self::Aux<'source>)> {
+        Ok((TestHeaderData { value: 1 }, ()))
+    }
+}
+
+/// Application with [`PointSeedStep`] registered.
+fn point_app() -> Application {
+    ApplicationBuilder::new()
+        .register(PointSeedStep)
+        .expect("register")
+        .finalize()
+        .expect("finalize")
+}
+
+#[test]
+fn header_with_point_round_trips() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let app = point_app();
+
+    let (pcd, ()) = app
+        .seed(&mut rng, PointSeedStep, Eq::generator())
+        .expect("seed with a non-identity point");
+    assert!(app.verify(&pcd, &mut rng).expect("verify"));
+}
+
+#[test]
+fn identity_point_in_output_header_fails_fuse() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let app = point_app();
+
+    assert!(
+        matches!(
+            app.seed(&mut rng, PointSeedStep, Eq::identity()),
+            Err(Error::InvalidWitness(_))
+        ),
+        "identity point in output header must fail"
+    );
+}
+
+#[test]
+fn identity_point_in_input_header_fails_fuse() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let app = ApplicationBuilder::new()
+        .register(PointSeedStep)
+        .expect("register")
+        .register(PointConsumeStep)
+        .expect("register")
+        .finalize()
+        .expect("finalize");
+
+    let bad_left = Proof::trivial().carry::<PointHeader>(PointHeaderData {
+        commitment: Eq::identity(),
+    });
+    let right = Proof::trivial().carry::<()>(());
+
+    assert!(
+        matches!(
+            app.fuse(&mut rng, PointConsumeStep, (), bad_left, right),
+            Err(Error::InvalidWitness(_))
+        ),
+        "identity point in input header must fail"
+    );
+}
+
+#[test]
+fn identity_point_in_carried_data_errors_verify() {
+    let mut rng = StdRng::seed_from_u64(0);
+    let app = point_app();
+
+    let (pcd, ()) = app
+        .seed(&mut rng, PointSeedStep, Eq::generator())
+        .expect("seed with a non-identity point");
+    let bad_pcd = pcd.proof.carry::<PointHeader>(PointHeaderData {
+        commitment: Eq::identity(),
+    });
+
+    // Errs rather than returning `Ok(false)`: re-encoding such a header
+    // fails synthesis in real ragu, it does not merely mismatch.
+    assert!(matches!(
+        app.verify(&bad_pcd, &mut rng),
+        Err(Error::InvalidWitness(_))
+    ));
 }

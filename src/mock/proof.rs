@@ -11,7 +11,11 @@
 //! | 104..136    | 32   | rerandomization tag                                |
 //! | 136..23000  | …    | zero padding                                       |
 
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec, vec::Vec};
+
+use ragu_arithmetic::{CurveAffine as _, ff::PrimeField as _, group::Curve as _};
+use ragu_core::{Error, Result};
+use ragu_pasta::{Ep, Eq, Fp, Fq};
 
 use crate::{
     header::{Header, Suffix},
@@ -79,26 +83,31 @@ impl<H: Header> Clone for Pcd<H> {
 impl Proof {
     #[must_use]
     pub fn trivial() -> Self {
-        Self::new(<() as Header>::SUFFIX, Index::internal(1), &[], &[])
+        Self::new(
+            <() as Header>::SUFFIX,
+            Index::internal(1),
+            &(Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            &[],
+        )
+        .expect("empty header cannot fail to hash")
     }
 
-    #[must_use]
     pub(crate) fn new(
         suffix: Suffix,
         step_index: Index,
-        encoded_header: &[u8],
+        encoded_header: &(Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>),
         witness_data: &[u8],
-    ) -> Self {
-        let header_hash = compute_header_hash(suffix, encoded_header);
+    ) -> Result<Self> {
+        let header_hash = compute_header_hash(suffix, encoded_header)?;
         let witness_hash = compute_witness_hash(witness_data);
         let binding = compute_binding(step_index, &header_hash, &witness_hash);
-        Self {
+        Ok(Self {
             step_index,
             header_hash,
             witness_hash,
             binding,
             rerand_tag: [0u8; HASH_SIZE],
-        }
+        })
     }
 
     /// Mirrors `ragu_pcd::Proof::carry`.
@@ -149,9 +158,7 @@ impl From<Proof> for [u8; PROOF_SIZE_COMPRESSED] {
 impl TryFrom<&[u8; PROOF_SIZE_COMPRESSED]> for Proof {
     type Error = ragu_core::Error;
 
-    fn try_from(bytes: &[u8; PROOF_SIZE_COMPRESSED]) -> Result<Self, Self::Error> {
-        use ragu_core::Error;
-
+    fn try_from(bytes: &[u8; PROOF_SIZE_COMPRESSED]) -> Result<Self> {
         let slice: &[u8] = bytes.as_slice();
         let (step_index_bytes, rest) = slice
             .split_first_chunk::<STEP_INDEX_SIZE>()
@@ -189,17 +196,72 @@ impl TryFrom<&[u8; PROOF_SIZE_COMPRESSED]> for Proof {
     }
 }
 
-pub(crate) fn compute_header_hash(suffix: Suffix, encoded: &[u8]) -> [u8; HASH_SIZE] {
-    let hash = blake2b_simd::Params::new()
+pub(crate) fn compute_header_hash(
+    suffix: Suffix,
+    encoded: &(Vec<Fp>, Vec<Fq>, Vec<Ep>, Vec<Eq>),
+) -> Result<[u8; HASH_SIZE]> {
+    let (fps, fqs, eps, eqs) = encoded;
+    let mut state = blake2b_simd::Params::new()
         .hash_length(HASH_SIZE)
         .personal(b"MkRagu_HdrHash_\0")
-        .to_state()
-        .update(&suffix.get().to_le_bytes())
-        .update(encoded)
-        .finalize();
+        .to_state();
+
+    {
+        state.update(b"Suffix");
+        state.update(&suffix.get().to_le_bytes());
+    }
+
+    {
+        state.update(b"Fp");
+        state.update(&(fps.len() as u64).to_le_bytes());
+        for element in fps {
+            state.update(element.to_repr().as_ref());
+        }
+    }
+
+    {
+        state.update(b"Fq");
+        state.update(&(fqs.len() as u64).to_le_bytes());
+        for element in fqs {
+            state.update(element.to_repr().as_ref());
+        }
+    }
+
+    {
+        state.update(b"Ep");
+        state.update(&(eps.len() as u64).to_le_bytes());
+        for point in eps {
+            let coordinates = point
+                .to_affine()
+                .coordinates()
+                .into_option()
+                .ok_or_else(|| {
+                    Error::InvalidWitness("point at infinity cannot be witnessed".into())
+                })?;
+            state.update(coordinates.x().to_repr().as_ref());
+            state.update(coordinates.y().to_repr().as_ref());
+        }
+    }
+
+    {
+        state.update(b"Eq");
+        state.update(&(eqs.len() as u64).to_le_bytes());
+        for point in eqs {
+            let coordinates = point
+                .to_affine()
+                .coordinates()
+                .into_option()
+                .ok_or_else(|| {
+                    Error::InvalidWitness("point at infinity cannot be witnessed".into())
+                })?;
+            state.update(coordinates.x().to_repr().as_ref());
+            state.update(coordinates.y().to_repr().as_ref());
+        }
+    }
+
     let mut out = [0u8; HASH_SIZE];
-    out.copy_from_slice(hash.as_bytes());
-    out
+    out.copy_from_slice(state.finalize().as_bytes());
+    Ok(out)
 }
 
 pub(crate) fn compute_witness_hash(witness_bytes: &[u8]) -> [u8; HASH_SIZE] {

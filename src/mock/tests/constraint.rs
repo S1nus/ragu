@@ -1,4 +1,7 @@
+use alloc::string::ToString as _;
+
 use ragu_arithmetic::{ff::Field as _, group::Group as _};
+use ragu_core::Error;
 use ragu_pasta::{Eq, Fp};
 
 use crate::constraint::*;
@@ -63,5 +66,15 @@ fn enforce_equal_point_rejects_distinct_points() {
     let g = Eq::generator();
     assert!(enforce_equal_point(g, g, "points must match").is_ok());
     assert!(enforce_equal_point(g, g.double(), "points must match").is_err());
-    assert!(enforce_equal_point(g, Eq::identity(), "points must match").is_err());
+}
+
+#[test]
+fn enforce_equal_point_rejects_identity() {
+    let err = enforce_equal_point(Eq::generator(), Eq::identity(), "points must match")
+        .expect_err("identity must be rejected");
+    assert!(matches!(err, Error::InvalidWitness(_)));
+    assert!(err.to_string().contains("point at infinity"));
+
+    // Not even `identity == identity`: the real gadget cannot witness it.
+    assert!(enforce_equal_point(Eq::identity(), Eq::identity(), "points must match").is_err());
 }
