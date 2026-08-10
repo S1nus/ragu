@@ -77,6 +77,18 @@ fn main() {
     emit_fq("fq_special", 14, Fq::from(1u64 << 48));
     emit_fq("fq_special", 15, Fq::from(u64::MAX));
 
+    // Power-of-two limb boundaries (2^64, 2^128, 2^192). The patcher's
+    // `AddWide` mutation assembles full-width deltas from u64 limbs, so these
+    // are the carry/overflow boundaries a limb-decomposition bug lives at.
+    let fp_two64 = Fp::from(u64::MAX) + Fp::ONE;
+    emit_fp("fp_pow2", 64, fp_two64);
+    emit_fp("fp_pow2", 128, fp_two64.square());
+    emit_fp("fp_pow2", 192, fp_two64.square() * fp_two64);
+    let fq_two64 = Fq::from(u64::MAX) + Fq::ONE;
+    emit_fq("fq_pow2", 64, fq_two64);
+    emit_fq("fq_pow2", 128, fq_two64.square());
+    emit_fq("fq_pow2", 192, fq_two64.square() * fq_two64);
+
     // Poseidon Fp round constants.
     let pfp = PoseidonFp;
     let mut idx = 0;

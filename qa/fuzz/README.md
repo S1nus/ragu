@@ -40,18 +40,35 @@ cargo +nightly fuzz run fuzz_element_ops -- -max_total_time=60
 
 ## Targets
 
-### Vec\<Op\>-style instruction-vector targets
+### Op-stream targets (shared substrate)
 
-Generate random `Vec<Op>` sequences of `Element`/`Boolean` gadget calls.
-All four share an essentially identical `Op` enum and dispatch — see the
-"why duplicated" note at the bottom.
+Decode the fuzzer's raw bytes into a program over a stack of
+`Element`/`Boolean` gadget calls, via the shared
+[`ragu_testing::substrate`] op grammar. All consume the same decoder,
+driver-generic synthesis dispatch, and (where applicable) native shadow —
+see the "Shared substrate" note at the bottom.
+
+[`ragu_testing::substrate`]: ../../crates/ragu_testing/src/substrate.rs
 
 | Target | What it catches |
 |---|---|
-| `fuzz_element_ops` | Completeness — random gadget compositions must not crash and must produce internally-consistent witnesses. The substrate. |
+| `fuzz_element_ops` | Completeness — random gadget compositions must not crash and must produce internally-consistent witnesses. The canonical robustness consumer of the substrate. |
 | `fuzz_witness_coverage` | Same as `fuzz_element_ops` plus a post-run witness-state hash spread across coverage branches. Biases the fuzzer toward distinct internal witness states. Opt-in POC (~28% throughput cost). |
-| `fuzz_witness_cheat` | Mid-stream replaces an element on the stack with a fresh allocation of a different value, then compares fingerprints against the honest run. Currently functions as a Simulator-robustness fuzzer (the soundness assertion is structurally tautological today); becomes a true under-constrained-gadget oracle once the patcher technique lands. The mutation scaffolding is in place. |
-| `fuzz_driver_metamorphic` | Differential — runs the same `Vec<Op>` through both `Simulator` and `Emulator<Wired<Fp>>`; wire values must match. Tests the model-vs-real-driver invariant. |
+| `fuzz_witness_cheat` | Mid-stream replaces an element on the stack with a fresh allocation of a different value (via the substrate's pre-op synthesis hook), then compares fingerprints against the honest run. A Simulator-robustness fuzzer; the constraint-side soundness oracles live in `fuzz_witness_pinning` / `fuzz_circuit_cheat` / `fuzz_advice_patcher` (below). |
+| `fuzz_driver_metamorphic` | Differential — runs the same generated program through both `Simulator` and `Emulator<Wired<Fp>>`; wire values must match. Tests the model-vs-real-driver invariant. |
+
+### Soundness / patcher targets
+
+Constraint-side under-constraint oracles over generated
+[`ragu_testing::substrate`] circuits (issues #728, #793, #796). Each starts
+from a satisfying witness, introduces a prover-style cheat, and demands the
+constraint system reject it.
+
+| Target | What it catches |
+|---|---|
+| `fuzz_witness_pinning` | Mutates one occupied coefficient of the assembled trace polynomial and demands the revdot identity reject it. The generated circuit is made fully-pinned (an `Anchor` per element) so every live coefficient is constrained — a survivor means the constraint system fails to pin that wire. |
+| `fuzz_circuit_cheat` | Mutates one witness input, re-traces, and asserts the assembled constraint-identity verdict matches an independent native oracle (with a Simulator cross-check). The operational patcher whose "repair" is re-tracing. |
+| `fuzz_advice_patcher` | Captures the emitted constraint graph through a recording driver, mutates free advice wires, and **repairs through the captured constraints** (not gadget logic) before comparing to the native shadow — catches under-constrained *advice* that re-trace-based repair masks. `PATCHER_SELFTEST=1` proves the oracle fires on a planted bug. |
 
 ### Gadget-API property and identity targets
 
@@ -73,7 +90,7 @@ All four share an essentially identical `Op` enum and dispatch — see the
 | `fuzz_endoscalar` | Endoscalar (point × scalar) operations; has its own `special_scalar` table with `Fp::ZETA`. |
 | `fuzz_revdot` | Reverse-dot-product primitive. |
 | `fuzz_fold_revdot` | RevDot folding. |
-| `fuzz_sxy_agreement` | `s(X, Y)` registry consistency. Caught `Key::new(0)` divide-by-zero. |
+| `fuzz_sxy_agreement` | `s(X, Y)` registry consistency (`wxy == wx.eval(y) == wy.eval(x)`) over arbitrary generated circuits. Caught `Key::new(0)` divide-by-zero. |
 
 ### Verifier robustness
 
@@ -90,8 +107,8 @@ gaps.
 
 | Target | What it catches |
 |---|---|
-| `fuzz_circuit_witness` | `Circuit::witness` pipeline correctness across six reference circuits — `SquareCircuit`, `MySimpleCircuit`, `BoolCircuit`, `PointCircuit`, `RoutineCircuit` (Routine via `Prediction::Unknown`), `KnownRoutineCircuit` (Routine via `Prediction::Known`). Asserts Simulator output matches a native Rust spec, that `trace::eval` agrees with `Simulator` on accept/reject, and the `assemble_with_alpha` α-injection contract. |
-| `fuzz_circuit_revdot_identity` | The canonical algebraic identity from `tests/mod.rs:158-187` — `r.revdot(r + r.dilate(z) + s(X,y) + t(X,z)) == circuit.ky(instance, y)` — for satisfying witnesses. Bridges the witness-driver side and the wiring/constraint side. Uses only pub APIs by deriving `s(X, y)` from `Registry::wy(omega_0, y)` minus the registry key term. |
+| `fuzz_circuit_witness` | `Circuit::witness` pipeline correctness. The `Generated` arm drives arbitrary substrate programs against the native shadow; bespoke `BoolCircuit`, `PointCircuit`, `RoutineCircuit` (Routine via `Prediction::Unknown`), and `KnownRoutineCircuit` (`Prediction::Known`) arms cover gadget families the grammar does not generate (points, custom routines). Asserts Simulator output matches the native spec, `trace::eval` agrees with `Simulator` on accept/reject, and the `assemble_with_alpha` α-injection contract. |
+| `fuzz_circuit_revdot_identity` | The canonical algebraic identity from `tests/mod.rs:158-187` — `r.revdot(r + r.dilate(z) + s(X,y) + t(X,z)) == circuit.ky(instance, y)` — over arbitrary generated circuits (accept direction; the rejection direction is `fuzz_witness_pinning`). Uses the public `Registry::circuit_y` for `s(X, y)`. |
 | `fuzz_staging` | Full staging-system coverage: **Invariant A** (`rx.revdot(own_mask) == 0` per stage), **Invariant B** (combined revdot identity through `MultiStage::witness`), **final_mask** check on the bare assembled trace, plus structural **cross-mask** (rx coefficient positions stay within the stage's declared range — robust against adversarial witness/y) and `skip_gates`/`num_gates` hand-coded pins. Three variants exercise `Single2W`, `Single4W`, and `Chain2x4` (parent → child, exercising `skip_gates` recursion). |
 
 ## Auxiliary tooling
@@ -167,19 +184,30 @@ Three workflows in `.github/workflows/`:
   writes the headline totals to the job summary, and uploads the full report
   with 90-day retention.
 
-## Why several targets duplicate the same `Op` enum
+## Shared substrate
 
-The four `Vec<Op>`-style targets (`fuzz_element_ops`,
-`fuzz_witness_coverage`, `fuzz_witness_cheat`,
-`fuzz_driver_metamorphic`) each have a copy of the same `Op` enum and
-dispatch — roughly 200 lines of mechanical duplication per file.
+The op-stream, soundness/patcher, and generated-circuit targets all build
+on one shared module, [`ragu_testing::substrate`], rather than the
+per-target `Op` enum each used to copy. The substrate is layered so each
+target consumes only what it needs:
 
-This is deliberate. cargo-fuzz expects `[[bin]]`-style fuzz targets, and
-sharing a `src/lib.rs` between fuzz targets adds friction with the
-cargo-fuzz workflow and the patch-table mirroring this crate already
-needs. The duplication is annotated in each file (`Identical dispatch
-logic to fuzz_element_ops and fuzz_witness_cheat`) so future edits
-propagate the same change everywhere.
+1. **AST** — a unified `Op` grammar with per-op capability flags and
+   `OpSet` masks; each target carves its vocabulary out of the union.
+2. **Decoding** — a total byte decoder (for libFuzzer) with decode-time
+   clamping, so the wire format and corpora are shared across targets,
+   plus `proptest` strategies over the same AST for in-tree property tests
+   under plain `cargo test`.
+3. **Synthesis** — one driver-generic interpreter (run under `Simulator`,
+   `Emulator`, and the patcher's recording driver).
+4. **Native shadow** — an `Fp` evaluator mirroring each op's true
+   semantics, for differential oracles.
+5. **Circuit wrapper** — a generated program as a registerable `Circuit`
+   (`ProgramCircuit`), with satisfying-witness `steer`ing, for the
+   constraint-level oracles.
+
+Living in `ragu_testing` (a dev-dependency both the fuzz workspace and the
+root workspace can reach) is what lets the same grammar feed both libFuzzer
+targets and deterministic in-tree proptests.
 
 ## Patch table
 
@@ -196,7 +224,12 @@ mismatches at link time.
 - **PR #708** — extended framework: witness-mutation soundness, driver
   metamorphic, coverage augmentation, algebraic identities, field-
   element dictionary, plus housekeeping (`AllocRaw`, expanded
-  `special_value`, `-max_len`, weekly cron). This PR.
+  `special_value`, `-max_len`, weekly cron).
+- **PR #794** (issues #728/#793/#796) — the patcher technique
+  (`fuzz_witness_pinning`, `fuzz_circuit_cheat`, `fuzz_advice_patcher`)
+  and the shared `ragu_testing::substrate`: all op-stream targets migrated
+  onto it, and the constraint-level targets generalized from the two fixed
+  dummy circuits to arbitrary generated ones.
 - Talks/papers referenced in the PR descriptions for technique
   attribution (Aztec BigField, Aztec Noir/Brillig, TU Vienna Circus,
   zksecurity "Towards Fuzzing Zero-Knowledge Proof Circuits").

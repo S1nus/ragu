@@ -6,6 +6,11 @@
 //! from the honest one. After both runs complete, the final element and
 //! boolean values are compared.
 //!
+//! The op grammar, byte decoding, and gadget dispatch live in
+//! [`ragu_testing_fuzz::substrate`]; the cheat is injected through the
+//! substrate's pre-op synthesis hook. This harness owns the cheat
+//! machinery, the dead-cheat triage, and the fingerprint comparison.
+//!
 //! # Current effective behavior
 //!
 //! As implemented, this target functions primarily as a Simulator
@@ -17,96 +22,32 @@
 //! indexing, and arithmetic faults in the gadget API when fed adversarial
 //! inputs — not under-constrained gadgets.
 //!
-//! # Intended behavior (post-patcher)
+//! # The constraint-side oracles live elsewhere
 //!
-//! Becoming a true under-constrained-gadget oracle requires two changes,
-//! both tracked in the patcher follow-up issue:
-//!
-//! 1. A patcher pass that, after the cheat is injected, walks the
-//!    recorded constraint graph forward from the cheated slot and adjusts
-//!    other downstream witness slots so the constraint system stays
-//!    satisfied. Without this, the cheat is either rejected by the first
-//!    downstream constraint that compares it against a honest-derived
-//!    value, or it propagates only through gates that self-satisfy
-//!    (`c = a*b` recomputed from the cheat).
-//!
-//! 2. Excluding the cheated slot from the comparison fingerprint, so the
-//!    `honest != cheat` check reflects downstream observable behavior
-//!    rather than the cheat injection itself.
-//!
-//! With both in place, the assertion becomes: "the Simulator accepted two
-//! genuinely different witnesses producing the same observable behavior"
-//! — the canonical under-constrained-gadget signal.
-//!
-//! # Why this is the witness-mutation pattern, adapted to Ragu
-//!
-//! Ragu's `Simulator` checks witness satisfaction inline with synthesis:
-//! wires are field values, not indexed slots in a matrix, and there is no
-//! `prove(witness)` entry that takes an externally-supplied witness
-//! vector. The paper's "mutate slot s, re-prove, observe verifier" pattern
-//! translates here to "intercept the value flowing through a gadget,
-//! continue the simulation, observe whether the discrepancy is caught."
-//! The Simulator's `Ok` is a sound proxy for verifier acceptance under
-//! the model-vs-real-driver equivalence assumption that the rest of the
-//! crate depends on.
+//! The originally planned "patcher" pass cannot turn this target into an
+//! under-constrained-gadget oracle: every downstream gadget recomputes
+//! honestly from the cheated value, so gates self-satisfy by construction
+//! and the constraint matrix is never consulted — Simulator-side
+//! perturbation, with or without a patcher, observes only witness
+//! generation. The true oracles are `fuzz_witness_pinning` (single-wire
+//! trace-coefficient mutation against the revdot identity),
+//! `fuzz_circuit_cheat` (input mutation against the assembled constraint
+//! identity), and `fuzz_advice_patcher` (advice mutation repaired through
+//! the captured constraint graph). This target remains in the rotation for
+//! what it demonstrably catches: panics, OOB indexing, and arithmetic
+//! faults in the gadget API under adversarial mid-stream value
+//! substitution.
 
 #![no_main]
 
 use arbitrary::Arbitrary;
-use ff::Field;
-use ff::PrimeField;
 use libfuzzer_sys::fuzz_target;
 use pasta_curves::Fp;
-use ragu_arithmetic::Coeff;
-use ragu_core::maybe::Maybe;
-use ragu_primitives::{Boolean, Element, Simulator, allocator::Standard};
-
-fn special_value(idx: u8) -> Fp {
-    match idx % 16 {
-        0 => Fp::ZERO,
-        1 => Fp::ONE,
-        2 => -Fp::ONE,
-        3 => -Fp::from(2),
-        4 => Fp::TWO_INV,
-        5 => Fp::from(2),
-        6 => Fp::from(3),
-        7 => Fp::from(7),
-        8 => Fp::ROOT_OF_UNITY,
-        9 => Fp::ROOT_OF_UNITY.square(),
-        10 => Fp::ROOT_OF_UNITY.pow_vartime([4u64]),
-        11 => Fp::MULTIPLICATIVE_GENERATOR,
-        12 => Fp::MULTIPLICATIVE_GENERATOR.square(),
-        13 => Fp::from(1u64 << 32),
-        14 => Fp::from(1u64 << 48),
-        _ => Fp::from(u64::MAX),
-    }
-}
-
-#[derive(Arbitrary, Debug, Clone, Copy)]
-enum Op {
-    Add(u8, u8),
-    Sub(u8, u8),
-    Mul(u8, u8),
-    Square(u8),
-    Double(u8),
-    Negate(u8),
-    Invert(u8),
-    IsZero(u8),
-    Divide(u8, u8),
-    Scale(u8, u64),
-    Fold(u8, u8, u64),
-    AllocConst(u64),
-    AllocSpecial(u8),
-    AllocSquare(u64),
-    /// Allocate an `Element` whose value is the 32-byte chunk interpreted
-    /// as a canonical `Fp` (via `Fp::from_repr`). Lets libFuzzer's
-    /// dictionary entries land directly in the witness.
-    AllocRaw([u8; 32]),
-    BoolAlloc(bool),
-    BoolNot(u8),
-    BoolAnd(u8, u8),
-    ConditionalSelect(u8, u8, u8),
-}
+use ragu_core::{Error, drivers::Driver, maybe::Maybe};
+use ragu_primitives::{Element, Simulator, allocator::Standard};
+use ragu_testing_fuzz::substrate::{
+    Capabilities, Limits, Op, OpKind, OpSet, Preamble, Program, special_value, synthesize_with_hook,
+};
 
 /// How the cheat replaces an element.
 #[derive(Arbitrary, Debug, Clone, Copy)]
@@ -124,38 +65,25 @@ enum CheatFlavor {
 
 #[derive(Arbitrary, Debug)]
 struct Input {
-    seeds: [u64; 4],
-    large_seeds: [[u64; 4]; 2],
-    special_seeds: [u8; 2],
-    constant_mask: u8,
-    ops: Vec<Op>,
-    /// Index into `ops` at which to apply the cheat. The cheat replaces
-    /// `elems[target_idx]` *before* `ops[cheat_at]` is executed.
+    /// Index into the decoded ops at which to apply the cheat. The cheat
+    /// replaces `elems[target_idx]` *before* `ops[cheat_at]` is executed.
     cheat_at: u16,
     /// Index (mod current stack length) of the slot to replace.
     target_idx: u8,
     cheat: CheatFlavor,
+    /// Raw program bytes, decoded via [`Program::decode`]. Last field, so
+    /// `arbitrary_take_rest` hands it the remainder of the input.
+    program: Vec<u8>,
+}
+
+/// The historical 19-op robustness vocabulary: everything except `Anchor`.
+fn opset() -> OpSet {
+    OpSet::ALL.without(Capabilities::ANCHORS)
 }
 
 /// Final-state fingerprint: every element's value followed by every
 /// boolean's value, in stack order.
 type Fingerprint = (Vec<Fp>, Vec<bool>);
-
-/// Build the initial seed elements identical to fuzz_element_ops.
-fn build_seeds(input: &Input) -> Vec<Fp> {
-    let mut fes: Vec<Fp> = input.seeds.iter().map(|v| Fp::from(*v)).collect();
-    for ls in &input.large_seeds {
-        let val = Fp::from(ls[0])
-            + Fp::from(ls[1]) * Fp::from(1u64 << 32)
-            + Fp::from(ls[2]) * Fp::from(1u64 << 48)
-            + Fp::from(ls[3]) * Fp::from(1u64 << 56);
-        fes.push(val);
-    }
-    for ss in &input.special_seeds {
-        fes.push(special_value(*ss));
-    }
-    fes
-}
 
 /// Execute the program (with or without the cheat) and return the final
 /// fingerprint if the Simulator accepted.
@@ -163,220 +91,64 @@ fn build_seeds(input: &Input) -> Vec<Fp> {
 /// Returns `None` if the simulator rejected, or if `apply_cheat` was true
 /// but the chosen cheat value coincided with the slot's existing value
 /// (a degenerate input that would produce a false-positive fingerprint
-/// match).
-fn run_path(input: &Input, fes: &[Fp], apply_cheat: bool) -> Option<Fingerprint> {
+/// match) — the hook aborts that run with an error.
+fn run_path(program: &Program, input: &Input, apply_cheat: bool) -> Option<Fingerprint> {
     let mut snapshot: Option<Fingerprint> = None;
-    let mut cheat_noop = false;
 
-    let sim = Simulator::<Fp>::simulate(fes.to_vec(), |dr, witness| {
-        let allocator = &mut Standard::new();
-        let mut elems: Vec<Element<'_, _>> = (0..fes.len())
-            .map(|i| {
-                if input.constant_mask & (1 << (i % 8)) != 0 {
-                    Ok(Element::constant(dr, fes[i]))
-                } else {
-                    Element::alloc(dr, allocator, witness.as_ref().map(|v| v[i]))
-                }
-            })
-            .collect::<Result<_, _>>()?;
-        let mut bools: Vec<Boolean<'_, _>> = Vec::new();
-
-        for (i, op) in input.ops.iter().enumerate() {
-            // Apply the cheat *before* executing ops[cheat_at]. We
-            // require a non-empty elems stack, otherwise there is
-            // nothing to cheat on and the test is degenerate.
-            //
-            // Clamp the target to indices < 64 so the cheated element
-            // survives any future `elems.truncate(64)` call. Otherwise
-            // the cheat can be dropped from the stack mid-run, removing
-            // it from the final fingerprint and producing a false-
-            // positive match.
-            if apply_cheat && i == input.cheat_at as usize && !elems.is_empty() {
-                let target = (input.target_idx as usize) % elems.len().min(64);
-                let original_val: Fp = *elems[target].value().take();
-                let cheat_val = match input.cheat {
-                    CheatFlavor::Alloc(v) => Fp::from(v),
-                    CheatFlavor::Constant(v) => Fp::from(v),
-                    CheatFlavor::Special(idx) => special_value(idx),
-                };
-                if original_val == cheat_val {
-                    // No actual cheat — the chosen replacement value
-                    // happens to equal what was already there. Fingerprints
-                    // would trivially match. Flag and bail out so the
-                    // outer harness discards this run.
-                    cheat_noop = true;
-                    return Ok(());
-                }
-                let cheated = match input.cheat {
-                    CheatFlavor::Alloc(_) | CheatFlavor::Special(_) => Element::alloc(
-                        dr,
-                        allocator,
-                        witness.as_ref().map(|_| cheat_val),
-                    )?,
-                    CheatFlavor::Constant(_) => Element::constant(dr, cheat_val),
-                };
-                elems[target] = cheated;
-            }
-
-            let elen = elems.len();
-            let blen = bools.len();
-            if elen == 0 {
-                break;
-            }
-
-            match *op {
-                Op::Add(a, b) => {
-                    let (a, b) = (a as usize % elen, b as usize % elen);
-                    let r = elems[a].add(dr, &elems[b]);
-                    elems.push(r);
-                }
-                Op::Sub(a, b) => {
-                    let (a, b) = (a as usize % elen, b as usize % elen);
-                    let r = elems[a].sub(dr, &elems[b]);
-                    elems.push(r);
-                }
-                Op::Mul(a, b) => {
-                    let (a, b) = (a as usize % elen, b as usize % elen);
-                    if let Ok(r) = elems[a].mul(dr, &elems[b]) {
-                        elems.push(r);
+    let sim = Simulator::<Fp>::simulate((), |dr, _| {
+        let stacks = synthesize_with_hook(
+            dr,
+            &mut Standard::new(),
+            program,
+            &[],
+            |dr, idx, elems, _bools| {
+                // Apply the cheat *before* executing ops[cheat_at]. We
+                // require a non-empty elems stack, otherwise there is
+                // nothing to cheat on and the test is degenerate.
+                //
+                // Clamp the target to indices < 64 so the cheated element
+                // survives any future truncation to ELEM_TRUNCATE_TO.
+                // Otherwise the cheat can be dropped from the stack
+                // mid-run, removing it from the final fingerprint and
+                // producing a false-positive match.
+                if apply_cheat && idx == input.cheat_at as usize && !elems.is_empty() {
+                    let target = (input.target_idx as usize) % elems.len().min(64);
+                    let original_val: Fp = *elems[target].value().take();
+                    let cheat_val = match input.cheat {
+                        CheatFlavor::Alloc(v) => Fp::from(v),
+                        CheatFlavor::Constant(v) => Fp::from(v),
+                        CheatFlavor::Special(idx) => special_value(idx),
+                    };
+                    if original_val == cheat_val {
+                        // No actual cheat — the chosen replacement value
+                        // happens to equal what was already there.
+                        // Fingerprints would trivially match; abort so the
+                        // outer harness discards this run.
+                        return Err(Error::InvalidWitness("degenerate no-op cheat".into()));
                     }
-                }
-                Op::Square(a) => {
-                    let a = a as usize % elen;
-                    if let Ok(r) = elems[a].square(dr) {
-                        elems.push(r);
-                    }
-                }
-                Op::Double(a) => {
-                    let a = a as usize % elen;
-                    let r = elems[a].double(dr);
-                    elems.push(r);
-                }
-                Op::Negate(a) => {
-                    let a = a as usize % elen;
-                    let r = elems[a].negate(dr);
-                    elems.push(r);
-                }
-                Op::Invert(a) => {
-                    let a = a as usize % elen;
-                    if let Ok(r) = elems[a].invert(dr) {
-                        elems.push(r);
-                    }
-                }
-                Op::IsZero(a) => {
-                    let a = a as usize % elen;
-                    if let Ok(b) = elems[a].is_zero(dr, allocator) {
-                        bools.push(b);
-                    }
-                }
-                Op::Divide(a, b) => {
-                    let (a, b) = (a as usize % elen, b as usize % elen);
-                    if let Ok(b_nz) = elems[b].clone().enforce_nonzero(dr)
-                        && let Ok(r) = elems[a].divide(dr, &b_nz)
-                    {
-                        elems.push(r);
-                    }
-                }
-                Op::Scale(a, c) => {
-                    let a = a as usize % elen;
-                    let r = elems[a].scale(dr, Coeff::Arbitrary(Fp::from(c)));
-                    elems.push(r);
-                }
-                Op::Fold(a, b, s) => {
-                    let (a, b) = (a as usize % elen, b as usize % elen);
-                    let scale = Element::alloc(
-                        dr,
-                        allocator,
-                        witness.as_ref().map(|_| Fp::from(s)),
-                    )?;
-                    if let Ok(r) = Element::fold(dr, [&elems[a], &elems[b]], &scale) {
-                        elems.push(r);
-                    }
-                }
-                Op::AllocConst(v) => {
-                    let r = Element::constant(dr, Fp::from(v));
-                    elems.push(r);
-                }
-                Op::AllocSpecial(idx) => {
-                    let v = special_value(idx);
-                    let r = Element::alloc(dr, allocator, witness.as_ref().map(|_| v))?;
-                    elems.push(r);
-                }
-                Op::AllocRaw(bytes) => {
-                    let v: Option<Fp> = Fp::from_repr(bytes).into();
-                    if let Some(fp) = v {
-                        if let Ok(r) =
-                            Element::alloc(dr, allocator, witness.as_ref().map(|_| fp))
-                        {
-                            elems.push(r);
+                    let cheated = match input.cheat {
+                        CheatFlavor::Alloc(_) | CheatFlavor::Special(_) => {
+                            Element::alloc(dr, &mut (), Simulator::<Fp>::just(move || cheat_val))?
                         }
-                    }
+                        CheatFlavor::Constant(_) => Element::constant(dr, cheat_val),
+                    };
+                    elems[target] = cheated;
                 }
-                Op::AllocSquare(v) => {
-                    if let Ok((root, sq)) = Element::alloc_square(
-                        dr,
-                        witness.as_ref().map(|_| Fp::from(v)),
-                    ) {
-                        elems.push(root);
-                        elems.push(sq);
-                    }
-                }
-                Op::BoolAlloc(v) => {
-                    if let Ok(b) = Boolean::alloc(
-                        dr,
-                        allocator,
-                        witness.as_ref().map(|_| v),
-                    ) {
-                        bools.push(b);
-                    }
-                }
-                Op::BoolNot(a) => {
-                    if blen > 0 {
-                        let a = a as usize % blen;
-                        let r = bools[a].not(dr);
-                        bools.push(r);
-                    }
-                }
-                Op::BoolAnd(a, b) => {
-                    if blen > 0 {
-                        let (a, b) = (a as usize % blen, b as usize % blen);
-                        if let Ok(r) = bools[a].and(dr, &bools[b]) {
-                            bools.push(r);
-                        }
-                    }
-                }
-                Op::ConditionalSelect(cond, a, b) => {
-                    if blen > 0 {
-                        let cond = cond as usize % blen;
-                        let (a, b) = (a as usize % elen, b as usize % elen);
-                        if let Ok(r) = bools[cond].conditional_select(
-                            dr, &elems[a], &elems[b],
-                        ) {
-                            elems.push(r);
-                        }
-                    }
-                }
-            }
-
-            if elems.len() > 128 {
-                elems.truncate(64);
-            }
-            if bools.len() > 64 {
-                bools.truncate(32);
-            }
-        }
+                Ok(())
+            },
+        )?;
 
         // Capture the final stack state. Element::value and Boolean::value
         // are infallible under the Simulator driver because its MaybeKind
         // is Always.
-        let elem_vals: Vec<Fp> = elems.iter().map(|e| *e.value().take()).collect();
-        let bool_vals: Vec<bool> = bools.iter().map(|b| b.value().take()).collect();
+        let elem_vals: Vec<Fp> = stacks.elems.iter().map(|e| *e.value().take()).collect();
+        let bool_vals: Vec<bool> = stacks.bools.iter().map(|b| b.value().take()).collect();
         snapshot = Some((elem_vals, bool_vals));
 
         Ok(())
     });
 
-    if sim.is_err() || cheat_noop {
+    if sim.is_err() {
         return None;
     }
     snapshot
@@ -388,17 +160,20 @@ fn run_path(input: &Input, fes: &[Fp], apply_cheat: bool) -> Option<Fingerprint>
 /// running the Simulator. Assumes Result-returning ops succeed (worst
 /// case for "did the cheat propagate" — gives an upper bound).
 fn op_pushes(op: &Op) -> usize {
-    match op {
-        Op::AllocSquare(_) => 2,
-        Op::IsZero(_) | Op::BoolAlloc(_) | Op::BoolNot(_) | Op::BoolAnd(_, _) => 0,
+    match op.kind() {
+        OpKind::AllocSquare => 2,
+        OpKind::IsZero | OpKind::BoolAlloc | OpKind::BoolNot | OpKind::BoolAnd | OpKind::Anchor => {
+            0
+        }
         _ => 1,
     }
 }
 
 /// Whether an Op's element-push is conditional on a runtime `Result`
-/// (`if let Ok(_)` in `run_path`). `op_pushes` is an upper bound for these
-/// — actual `run_path` execution may push zero. Used by `is_dead_cheat` to
-/// refuse predicting through unpredictable stack growth.
+/// (`if let Ok(_)` in the substrate dispatch). `op_pushes` is an upper
+/// bound for these — actual execution may push zero. Used by
+/// `is_dead_cheat` to refuse predicting through unpredictable stack
+/// growth.
 ///
 /// Note: ops that use `?` to propagate errors (e.g., `Op::AllocSpecial`,
 /// `Op::BoolAlloc`, the `Element::alloc` inside `Op::Fold`) are
@@ -411,15 +186,15 @@ fn op_pushes(op: &Op) -> usize {
 /// effective stack length between paths and need conservative bail-out.
 fn op_can_fail_push(op: &Op) -> bool {
     matches!(
-        op,
-        Op::Mul(_, _)
-            | Op::Square(_)
-            | Op::Invert(_)
-            | Op::Divide(_, _)
-            | Op::Fold(_, _, _)
-            | Op::AllocRaw(_)
-            | Op::AllocSquare(_)
-            | Op::ConditionalSelect(_, _, _)
+        op.kind(),
+        OpKind::Mul
+            | OpKind::Square
+            | OpKind::Invert
+            | OpKind::Divide
+            | OpKind::Fold
+            | OpKind::AllocRaw
+            | OpKind::AllocSquare
+            | OpKind::ConditionalSelect
     )
 }
 
@@ -429,12 +204,18 @@ fn op_reads_target(op: &Op, target: usize, elens: usize) -> bool {
         return false;
     }
     let resolves = |a: u8| (a as usize) % elens == target;
-    match op {
-        Op::Add(a, b) | Op::Sub(a, b) | Op::Mul(a, b) | Op::Divide(a, b)
-        | Op::Fold(a, b, _) => resolves(*a) || resolves(*b),
-        Op::ConditionalSelect(_, a, b) => resolves(*a) || resolves(*b),
-        Op::Scale(a, _) | Op::Square(a) | Op::Double(a) | Op::Negate(a)
-        | Op::Invert(a) | Op::IsZero(a) => resolves(*a),
+    match *op {
+        Op::Add(a, b) | Op::Sub(a, b) | Op::Mul(a, b) | Op::Divide(a, b) | Op::Fold(a, b, _) => {
+            resolves(a) || resolves(b)
+        }
+        Op::ConditionalSelect(_, a, b) => resolves(a) || resolves(b),
+        Op::Scale(a, _)
+        | Op::Square(a)
+        | Op::Double(a)
+        | Op::Negate(a)
+        | Op::Invert(a)
+        | Op::IsZero(a)
+        | Op::Anchor(a) => resolves(a),
         _ => false,
     }
 }
@@ -447,12 +228,12 @@ fn op_reads_target(op: &Op, target: usize, elens: usize) -> bool {
 /// observable at position `target_at_cheat` in the cheat-path fingerprint
 /// while honest-path holds the original value, so honest != cheated is
 /// trivially satisfied).
-fn triage_cheat(input: &Input) -> (usize, usize, usize) {
-    let mut elens: usize = input.seeds.len() + input.large_seeds.len() + input.special_seeds.len();
-    let cheat_at_idx = (input.cheat_at as usize).min(input.ops.len());
+fn triage_cheat(input: &Input, ops: &[Op]) -> (usize, usize, usize) {
+    let mut elens: usize = Preamble::LEN;
+    let cheat_at_idx = (input.cheat_at as usize).min(ops.len());
 
     // Walk pre-cheat ops to compute elens at cheat time.
-    for op in &input.ops[..cheat_at_idx] {
+    for op in &ops[..cheat_at_idx] {
         if elens == 0 {
             return (0, 0, 0);
         }
@@ -470,7 +251,7 @@ fn triage_cheat(input: &Input) -> (usize, usize, usize) {
 
     let mut downstream_reads = 0usize;
     let mut downstream_ops = 0usize;
-    for op in &input.ops[cheat_at_idx..] {
+    for op in &ops[cheat_at_idx..] {
         if elens == 0 {
             break;
         }
@@ -513,11 +294,11 @@ fn triage_cheat(input: &Input) -> (usize, usize, usize) {
 /// Bails out on the first read, so the walk costs O(prefix + 1) for live
 /// cheats vs. O(prefix + suffix) for dead cheats — the asymmetry favors
 /// the cheap path.
-fn is_dead_cheat(input: &Input) -> bool {
-    let mut elens: usize = input.seeds.len() + input.large_seeds.len() + input.special_seeds.len();
-    let cheat_at_idx = (input.cheat_at as usize).min(input.ops.len());
+fn is_dead_cheat(input: &Input, ops: &[Op]) -> bool {
+    let mut elens: usize = Preamble::LEN;
+    let cheat_at_idx = (input.cheat_at as usize).min(ops.len());
 
-    for op in &input.ops[..cheat_at_idx] {
+    for op in &ops[..cheat_at_idx] {
         // Pre-cheat fallible push → `elens` prediction may exceed reality,
         // breaking `target_at_cheat` agreement with `run_path`. Bail.
         if op_can_fail_push(op) {
@@ -533,13 +314,12 @@ fn is_dead_cheat(input: &Input) -> bool {
         return true;
     }
 
-    // Mirror `run_path` line 163: `target_idx % elems.len().min(64)`. The
-    // `.max(1)` guards `% 0` if `elens` is ever zero here (currently
-    // unreachable given the seed shape, but defends against future input
-    // schema changes).
-    let target_at_cheat = (input.target_idx as usize) % elens.min(64).max(1);
+    // Mirror `run_path`: `target_idx % elems.len().min(64)`. The clamp lower
+    // bound guards `% 0` if `elens` is ever zero here (currently unreachable
+    // given the preamble shape, but defends against future schema changes).
+    let target_at_cheat = (input.target_idx as usize) % elens.clamp(1, 64);
 
-    for op in &input.ops[cheat_at_idx..] {
+    for op in &ops[cheat_at_idx..] {
         if elens == 0 {
             break;
         }
@@ -556,17 +336,23 @@ fn is_dead_cheat(input: &Input) -> bool {
 }
 
 fuzz_target!(|input: Input| {
-    // DEBUG_INPUT=1 prints the parsed Arbitrary input and exits — useful for
-    // triaging crash artifacts. See README.md "DEBUG_INPUT env var" section.
+    let program = Program::decode(&input.program, opset(), Limits::default());
+
+    // DEBUG_INPUT=1 prints the parsed input and decoded program, then
+    // exits — useful for triaging crash artifacts. See README.md.
     if std::env::var("DEBUG_INPUT").is_ok() {
-        eprintln!("{:#?}", input);
+        eprintln!(
+            "cheat_at = {}, target_idx = {}, cheat = {:?}\n{program:#?}",
+            input.cheat_at, input.target_idx, input.cheat,
+        );
         return;
     }
     // TRIAGE_CHEAT=1 walks the op stream tracking the cheated slot and
     // reports how many downstream ops reference it. A 0 count means
     // "dead cheat" — the soundness signal is a false positive.
     if std::env::var("TRIAGE_CHEAT").is_ok() {
-        let (target_at_cheat, downstream_reads, downstream_ops) = triage_cheat(&input);
+        let (target_at_cheat, downstream_reads, downstream_ops) =
+            triage_cheat(&input, &program.ops);
         eprintln!(
             "cheat_at = {}\n\
              target_idx = {} → target_at_cheat = {}\n\
@@ -597,14 +383,13 @@ fuzz_target!(|input: Input| {
         }
         return;
     }
-    // Bound program length to keep iterations fast and avoid the truncation
-    // path dominating coverage.
-    if input.ops.is_empty() || input.ops.len() > 48 {
+    if program.ops.is_empty() {
         return;
     }
+
     // Cheat must land inside the executable op range, otherwise the cheat
     // is a no-op and fingerprints trivially match.
-    if (input.cheat_at as usize) >= input.ops.len() {
+    if (input.cheat_at as usize) >= program.ops.len() {
         return;
     }
 
@@ -614,17 +399,15 @@ fuzz_target!(|input: Input| {
     // fingerprint, differing from honest-path's original value by
     // construction), so running the simulator twice would be pure waste.
     // This walk reads bytes only; no field arithmetic, no constraint checks.
-    if is_dead_cheat(&input) {
+    if is_dead_cheat(&input, &program.ops) {
         return;
     }
 
-    let fes = build_seeds(&input);
-
-    let honest = match run_path(&input, &fes, false) {
+    let honest = match run_path(&program, &input, false) {
         Some(f) => f,
         None => return,
     };
-    let cheated = match run_path(&input, &fes, true) {
+    let cheated = match run_path(&program, &input, true) {
         Some(f) => f,
         None => return,
     };
@@ -637,10 +420,9 @@ fuzz_target!(|input: Input| {
          did not perturb the final state; \
          every downstream constraint and observation was insensitive to \
          the swap. Suspect an under-constrained gadget. \
-         Input: {:?}",
+         Program: {program:?}",
         input.cheat_at,
         input.target_idx,
         input.cheat,
-        input,
     );
 });

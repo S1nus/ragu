@@ -58,6 +58,9 @@ TARGETS=(
   fuzz_element_ops
   fuzz_circuit_witness
   fuzz_circuit_revdot_identity
+  fuzz_witness_pinning
+  fuzz_circuit_cheat
+  fuzz_advice_patcher
   fuzz_staging
   fuzz_revdot
   fuzz_fold_revdot
