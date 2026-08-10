@@ -25,8 +25,7 @@ commits to the correct $s(X,y)$ from the fixed wiring polynomial, and not some
 arbitrary polynomial $s'(X,y)$ that the prover made up?
 
 This is where _wiring consistency_ comes in. We need a protocol that lets the
-prover convince the verifier that their commitment is consistent with the known
-wiring structure, without the verifier doing $O(n)$ work.
+prover convince the verifier that the current step's commitment is consistent with the previous step's commitment, allowing the linear work to be deferred and performed once at the end of the PCD graph.
 
 The [Halo paper](https://eprint.iacr.org/2019/1021) introduced a clever
 solution for [single fixed circuits](#single-circuit-consistency). Ragu extends
