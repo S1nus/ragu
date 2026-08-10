@@ -9,7 +9,8 @@ use ragu_arithmetic::Cycle;
 use ragu_circuits::{
     Circuit, CircuitExt,
     polynomials::{ProductionRank, TestRank, sparse},
-    registry::{CircuitIndex, Registry, RegistryBuilder},
+    registry::{Registry, RegistryBuilder},
+    testing::synthesis_counts,
 };
 use ragu_pasta::{Fp, Pasta};
 use ragu_testing::circuits::{MySimpleCircuit, SquareCircuit};
@@ -77,24 +78,14 @@ fn eval_ky((a, b, y): (Fp, Fp, Fp)) {
 
 #[library_benchmark]
 #[bench::simple(MySimpleCircuit)]
-fn constraint_counts_simple(circuit: impl Circuit<Fp> + 'static) {
-    let registry = RegistryBuilder::<Fp, TestRank>::new()
-        .register_internal_circuit(circuit)
-        .unwrap()
-        .finalize()
-        .unwrap();
-    black_box(registry.constraint_counts(CircuitIndex::new(0)));
+fn metrics_simple(circuit: impl Circuit<Fp> + 'static) {
+    black_box(synthesis_counts(&circuit)).unwrap();
 }
 
 #[library_benchmark]
 #[benches::multiple( SquareCircuit { times: 2 }, SquareCircuit { times: 10 },)]
-fn constraint_counts_square(circuit: impl Circuit<Fp> + 'static) {
-    let registry = RegistryBuilder::<Fp, TestRank>::new()
-        .register_internal_circuit(circuit)
-        .unwrap()
-        .finalize()
-        .unwrap();
-    black_box(registry.constraint_counts(CircuitIndex::new(0)));
+fn metrics_square(circuit: impl Circuit<Fp> + 'static) {
+    black_box(synthesis_counts(&circuit)).unwrap();
 }
 
 #[library_benchmark(setup = setup_rng)]
@@ -114,7 +105,7 @@ fn trace_production_rank((circuit, (witness,)): (SquareCircuit, (Fp,))) {
 
 library_benchmark_group!(
     name = circuit_synthesis;
-    benchmarks = constraint_counts_simple, constraint_counts_square, eval_ky, trace_test_rank, trace_production_rank,
+    benchmarks = metrics_simple, metrics_square, eval_ky, trace_test_rank, trace_production_rank,
 );
 
 #[library_benchmark]

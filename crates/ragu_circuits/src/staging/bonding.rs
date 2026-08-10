@@ -254,14 +254,6 @@ impl<F: Field, R: Rank> WiringObject<F, R> for Stripped<'_, F, R> {
         poly
     }
 
-    // TODO(#614): revisit constraint_counts semantics — ambiguous with
-    // system constraints (enforce_one, registry key, SYSTEM gate).
-    fn constraint_counts(&self) -> (usize, usize) {
-        let (mul, lin) = self.0.constraint_counts();
-        // The inner object includes the `enforce_one` constraint that we strip.
-        (mul, lin - 1)
-    }
-
     fn segment_records(&self) -> &[SegmentRecord] {
         self.0.segment_records()
     }

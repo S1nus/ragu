@@ -396,11 +396,6 @@ impl<F: PrimeField, R: Rank> Registry<'_, F, R> {
         self.circuits.len()
     }
 
-    /// Returns the constraint counts for the given circuit.
-    pub fn constraint_counts(&self, circuit: CircuitIndex) -> (usize, usize) {
-        self.circuits[usize::from(circuit)].constraint_counts()
-    }
-
     /// Evaluates the registry key contribution $k \cdot (XY)^{4n-1}$
     /// at $(x, y)$, returning a scalar.
     fn key_sxy(&self, x: F, y: F) -> F {

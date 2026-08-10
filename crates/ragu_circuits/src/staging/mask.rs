@@ -215,14 +215,6 @@ impl<F: Field, R: Rank> WiringObject<F, R> for StageMask<R> {
         self.notch_project(y)
     }
 
-    fn constraint_counts(&self) -> (usize, usize) {
-        let num_gates = R::n();
-        // 4n-2 enforce_zero (all degrees from 4n-2 to 1, with dummies for
-        // active gates and the SYSTEM gate's inaccessible wires) + 1 enforce_one.
-        let num_constraints = 4 * R::n() - 1;
-        (num_gates, num_constraints)
-    }
-
     fn segment_records(&self) -> &[crate::SegmentRecord] {
         &[]
     }
@@ -753,30 +745,6 @@ mod tests {
             Fp::ZERO,
             "valid witness should produce well-formed stage polynomial"
         );
-    }
-
-    #[test]
-    fn test_constraint_counts_matches_metrics() {
-        for skip in 1..10 {
-            for num in 0..(R::n() - skip) {
-                let stage_mask = StageMask::<R>::new(skip, num).unwrap();
-                let (mul_from_method, linear_from_method) =
-                    <StageMask<R> as WiringObject<Fp, R>>::constraint_counts(&stage_mask);
-
-                let metrics = metrics::eval_raw::<Fp, _>(&stage_mask).unwrap();
-
-                assert_eq!(
-                    mul_from_method, metrics.num_gates,
-                    "gate count mismatch for skip={}, num={}",
-                    skip, num
-                );
-                assert_eq!(
-                    linear_from_method, metrics.num_constraints,
-                    "constraint count mismatch for skip={}, num={}",
-                    skip, num
-                );
-            }
-        }
     }
 
     #[test]

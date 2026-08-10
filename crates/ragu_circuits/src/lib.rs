@@ -28,6 +28,9 @@ pub mod polynomials;
 mod raw;
 pub mod registry;
 pub mod staging;
+/// Test-only circuit analysis utilities.
+#[cfg(feature = "test-utils")]
+pub mod testing;
 mod trace;
 mod trivial;
 mod wiring;
@@ -197,11 +200,6 @@ pub(crate) trait WiringObject<F: Field, R: Rank>: Send + Sync {
     fn sy(&self, y: F, floor_plan: &[floor_planner::ConstraintSegment])
     -> sparse::Polynomial<F, R>;
 
-    /// Returns constraint counts as `(gates, constraints)`, where gates is
-    /// the number of multiplication gates and constraints is the number of
-    /// [`enforce_zero`](ragu_core::drivers::Driver::enforce_zero) calls.
-    fn constraint_counts(&self) -> (usize, usize);
-
     /// Returns per-segment constraint records in DFS synthesis order.
     ///
     /// These records serve as input to [`floor_planner::floor_plan`] for
@@ -281,9 +279,6 @@ where
         ) -> sparse::Polynomial<F, R> {
             wiring::sy::eval(&self.circuit, y, floor_plan)
                 .expect("should succeed if metrics succeeded")
-        }
-        fn constraint_counts(&self) -> (usize, usize) {
-            (self.metrics.num_gates, self.metrics.num_constraints)
         }
         fn segment_records(&self) -> &[SegmentRecord] {
             &self.metrics.segments

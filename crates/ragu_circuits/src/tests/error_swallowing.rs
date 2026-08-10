@@ -354,11 +354,11 @@ fn test_error_swallowing_is_invisible_to_trace() {
 fn test_error_swallowing_desyncs_trace_and_metrics() {
     let witness = (Fp::from(3u64), Fp::from(7u64));
 
-    let good_obj = into_wiring_object::<_, _, TestRank>(WellBehavedCircuit).unwrap();
-    let bad_obj = into_wiring_object::<_, _, TestRank>(ErrorSwallowingCircuit).unwrap();
+    let good_metrics = crate::metrics::eval(&WellBehavedCircuit).unwrap();
+    let bad_metrics = crate::metrics::eval(&ErrorSwallowingCircuit).unwrap();
 
-    let (good_gates, good_constraints) = good_obj.constraint_counts();
-    let (bad_gates, bad_constraints) = bad_obj.constraint_counts();
+    let (good_gates, good_constraints) = (good_metrics.num_gates, good_metrics.num_constraints);
+    let (bad_gates, bad_constraints) = (bad_metrics.num_gates, bad_metrics.num_constraints);
 
     assert_eq!(
         good_gates + 1,
