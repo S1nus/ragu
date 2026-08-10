@@ -5,36 +5,36 @@
 //! ## Overview
 //!
 //! Optional values are common in Rust, and in `ragu` (like many SNARK
-//! frameworks) we wish to express the optional presence of witness data when
-//! writing composable and unified circuit abstractions and algorithms.
-//! Typically, the witness is present during proof generation and absent during
-//! key generation, yet the code paths are shared to ensure consistency,
-//! maintainability and readability.
+//! frameworks) we wish to express the optional presence of driver-managed values
+//! when writing composable and unified circuit abstractions and algorithms.
+//! Typically, these values are present during proof generation and absent
+//! during key generation, yet the code paths are shared to keep emitted
+//! constraints and native computations aligned.
 //!
 //! However, we almost always _statically_ know whether an `Option<T>`
-//! containing witness data is a `None` or a `Some(T)` since the synthesis is
+//! containing one of these values is a `None` or a `Some(T)` since the code is
 //! monomorphized for a specific backend context. In these cases, an `Option<T>`
-//! leads to unnecessary memory usage in contexts where the value is known to
-//! not exist. (This is both in terms of the empty, uninitialized value it
+//! leads to unnecessary memory usage in contexts where the value is known not
+//! to exist. (This is both in terms of the empty, uninitialized value it
 //! contains and the discriminant that identifies the variant at runtime.)
 //!
 //! These overheads are normally negligible, but in `ragu` we very frequently
-//! need to perform circuit synthesis (polynomial reductions) without access to
-//! a witness. In fact, this process consumes the _vast_ majority of the proof
-//! generation time, even after the aggressive optimizations implemented in this
-//! library. One of the easiest and most impactful wins would be static analysis
-//! of monomorphized circuit synthesis code that proxies an `Option<T>` to a `T`
-//! when the value is required to exist and proxies it to a zero-sized type when
-//! it is guaranteed _not_ to exist.
+//! need to run constraint-system analysis and polynomial reductions without
+//! access to driver-managed values. In fact, this process consumes the _vast_
+//! majority of the proof generation time, even after the aggressive
+//! optimizations implemented in this library. One of the easiest and most
+//! impactful wins would be static analysis of monomorphized circuit code that
+//! proxies an `Option<T>` to a `T` when the value is required to exist and
+//! proxies it to a zero-sized type when it is guaranteed _not_ to exist.
 //!
 //! Rust cannot perform this static analysis with the native `Option<T>` type,
 //! and so the [`Maybe<T>`] trait is a higher-kinded abstraction for this
 //! purpose. There are further benefits. We now achieve compile-time guarantees
-//! about the presence or absence of witness data, and entire classes of bugs
-//! and error conditions are eliminated by design. (As an example, `ragu` does
-//! not have the concept of a "missing witness" error that can be seen in
+//! about the presence or absence of driver-managed values, and entire classes of
+//! bugs and error conditions are eliminated by design. (As an example, `ragu`
+//! does not have the concept of a "missing witness" error that can be seen in
 //! `halo2`, `bellman`, `arkworks`, etc.) The [`Maybe<T>`] trait also simplifies
-//! situations involving _nested_ optionality of witness data, which can be
+//! situations involving _nested_ optionality of these values, which can be
 //! confusing in the context of recursive proofs.
 //!
 //! See the *Witness Data* chapter in the [book] for the full motivation

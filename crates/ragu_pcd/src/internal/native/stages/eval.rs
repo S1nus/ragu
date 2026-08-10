@@ -140,7 +140,7 @@ pub struct ChildEvaluations<'dr, D: Driver<'dr>> {
 }
 
 impl<'dr, D: Driver<'dr>> ChildEvaluations<'dr, D> {
-    /// Allocate child evaluations from pre-computed witness values.
+    /// Allocates child evaluations from pre-computed witness input values.
     pub fn alloc<A: Allocator<'dr, D>>(
         dr: &mut D,
         allocator: &mut A,

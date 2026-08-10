@@ -57,7 +57,7 @@ const NUM_UNIFIED_CIRCUITS: usize = 4;
 ///   `ax` uses $r\_i(xz)$ directly (since $A$ has no dilation), while `bx` adds
 ///   $s\_y + t(xz)$.
 pub trait Processor<Rx, AppCircuitId> {
-    /// Process a raw claim with `a` and `b` traces supplied directly
+    /// Processes a raw claim with `a` and `b` traces provided directly.
     /// ($k(y) = c$).
     fn raw_claim(&mut self, a: Rx, b: Rx);
 

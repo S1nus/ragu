@@ -123,7 +123,7 @@ macro_rules! define_unified_instance {
         ///
         /// This struct holds the concrete field values corresponding to [`Output`]
         /// fields. It is constructed during proof generation in the fuse pipeline
-        /// and passed to circuits as witness data for gadget allocation.
+        /// and passed to circuits as witness input for gadget allocation.
         ///
         /// Also carries [`Coverage`] so that a single value threads through
         /// all internal circuits, accumulating coverage as it goes.
@@ -297,7 +297,7 @@ define_unified_instance! {
 
 /// A lazy-allocation slot for a single field in the unified output.
 ///
-/// Slots enable circuits to either pre-compute values (via
+/// Slots enable circuits to either compute values in circuit (via
 /// [`provide`](Self::provide)) or allocate on-demand (via
 /// [`read`](Self::read)). This avoids redundant wire allocations when the
 /// same value is computed by multiple code paths.
@@ -305,19 +305,19 @@ define_unified_instance! {
 /// `W` is the native (non-circuit) value type for the field; `T` is the
 /// corresponding circuit gadget type.
 ///
-/// Each slot holds a pre-extracted `W` witness value and an allocation
+/// Each slot holds a pre-extracted `W` witness input value and an allocation
 /// function `W → T`. A circuit fills the slot using one of three methods,
 /// or leaves it for `finish` to handle via [`take`](Self::take):
 ///
 /// | Method | Source | Marks covered? | Use case |
 /// |--------|--------|----------------|----------|
-/// | [`read`](Self::read)       | witness  | no  | Another circuit covers this slot |
+/// | [`read`](Self::read)       | witness input | no  | Another circuit covers this slot |
 /// | [`provide`](Self::provide) | in-circuit | yes | This circuit computed the value |
-/// | [`receive`](Self::receive) | witness  | yes | This circuit constrains the witnessed value |
-/// | [`take`](Self::take)       | witness  | no  | Internal — used by `finish` |
+/// | [`receive`](Self::receive) | witness input | yes | This circuit constrains the value |
+/// | [`take`](Self::take)       | witness input | no  | Internal — used by `finish` |
 ///
 /// Use [`read`](Self::read) when the circuit needs the allocated `T`
-/// during synthesis but another circuit is responsible for constraining
+/// during constraint emission but another circuit is responsible for constraining
 /// it. Omit it and let `finish` call [`take`](Self::take) when the circuit
 /// does not reference the field at all.
 ///
@@ -346,7 +346,7 @@ impl<'dr, D: Driver<'dr>, A, T: Clone, W: Copy + Send + Sync> Slot<'dr, D, A, T,
         }
     }
 
-    /// Allocates the value from witness without marking covered.
+    /// Allocates the value from witness input without marking covered.
     ///
     /// Use this when another circuit is responsible for constraining this
     /// slot's correctness. See [`provide`](Self::provide) or
@@ -370,8 +370,7 @@ impl<'dr, D: Driver<'dr>, A, T: Clone, W: Copy + Send + Sync> Slot<'dr, D, A, T,
     /// Fiat-Shamir challenge) and takes responsibility for its correctness.
     /// Marks the slot as covered in [`Coverage`].
     ///
-    /// See [`receive`](Self::receive) for the externally-supplied
-    /// counterpart.
+    /// See [`receive`](Self::receive) for the witness-input counterpart.
     ///
     /// # Panics
     ///
@@ -382,12 +381,11 @@ impl<'dr, D: Driver<'dr>, A, T: Clone, W: Copy + Send + Sync> Slot<'dr, D, A, T,
         self.was_set = true;
     }
 
-    /// Receives an externally-supplied value from witness and marks covered.
+    /// Allocates a value from witness input and marks it covered.
     ///
-    /// Use when this circuit **receives** a value determined outside the
-    /// circuit (e.g., a commitment) and takes responsibility for
-    /// constraining its correctness via a separate constraint on the
-    /// returned value.
+    /// Use when this circuit receives a value determined outside the circuit
+    /// (e.g., a commitment) and takes responsibility for constraining its
+    /// correctness via a separate constraint on the returned value.
     ///
     /// See [`provide`](Self::provide) for the internally-computed
     /// counterpart.
@@ -524,7 +522,8 @@ mod tests {
 
     #[test]
     fn num_wires_constant_is_correct() {
-        // Use a wireless emulator with Empty witness - the emulator never reads witness values.
+        // Use a wireless emulator with Empty witness input; the emulator never
+        // reads witness input.
         let mut emulator = Emulator::counter();
         let output = Output::<'_, _, Pasta>::alloc_from_proof::<ProductionRank, _>(
             &mut emulator,

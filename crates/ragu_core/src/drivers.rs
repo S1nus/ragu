@@ -2,24 +2,26 @@
 //! circuits in Ragu.
 //!
 //! The fundamental interface of Ragu is [`Driver`], a trait that describes an
-//! interpreter or synthesis context for cryptographic protocols. Nearly all
-//! protocols in Ragu are implemented in terms of drivers, enabling most of the
-//! codebase to share a common execution model.
+//! interpreter for cryptographic protocols and arithmetic circuit code. Nearly
+//! all protocols in Ragu are implemented in terms of drivers, enabling most of
+//! the codebase to share a common execution model.
 //!
-//! Drivers create wires, assign values, and enforce constraints. They use a
-//! [`Maybe<T>`] type (via [`DriverValue`]) to statically gate witness
-//! computation, and define their own opaque [`Driver::Wire`] type so that
-//! monomorphized code inherits driver-specific optimizations. Drivers can
-//! execute circuit synthesis within [routines](crate::routines), which grant
-//! them flexibility for parallelization, memoization, and other optimizations
-//! via [`WireMap`](crate::convert::WireMap).
+//! Drivers create wires, compute assignments when available, and enforce
+//! constraints. Circuit code that is generic over a driver must emit the same
+//! constraints independently of values carried through [`DriverValue`]. Drivers
+//! use a [`Maybe<T>`] type to statically gate witness generation, and define
+//! their own opaque [`Driver::Wire`] type so that monomorphized code inherits
+//! driver-specific optimizations. Drivers can execute circuit code within
+//! [routines](crate::routines), which grant them flexibility for
+//! parallelization, memoization, and other optimizations via
+//! [`WireMap`](crate::convert::WireMap).
 //!
-//! * **Integration of witness evaluation**: Constraints can be written
-//!   alongside witness computation logic, even though drivers tend to reason
+//! * **Integration of witness generation**: Constraints can be written
+//!   alongside witness-generation logic, even though drivers tend to reason
 //!   about one or the other. To reduce overhead, drivers specify a [`Maybe<T>`]
 //!   type (via the type alias [`DriverValue`]) which enables static analysis
-//!   and optimization of witness computation for a specific driver context.
-//!   This coupling with witness evaluation logic is a zero-cost abstraction.
+//!   and optimization of driver-managed value handling for a specific context.
+//!   This coupling with witness generation is a zero-cost abstraction.
 //! * **Integration of in-circuit and out-of-circuit code**: Recursive proofs
 //!   require many algorithms to be executed both within and outside of
 //!   circuits, and these implementations must remain consistent for
@@ -30,14 +32,14 @@
 //!   types allow simpler implementations of drivers for a wider variety of
 //!   contexts. The optimal representation of wires can vary widely: they might
 //!   be smart pointers, partial polynomial evaluations, assignment values, or
-//!   even just the unit type `()`. Monomorphized circuit synthesis code
-//!   inherits memory and performance optimizations from these specializations.
+//!   even just the unit type `()`. Monomorphized circuit code inherits memory
+//!   and performance optimizations from these specializations.
 //!
 //! ### Routines
 //!
-//! Drivers can execute circuit synthesis within well-defined abstraction
+//! Drivers can execute circuit code within well-defined abstraction
 //! boundaries called [routines](crate::routines). In exchange for a slightly
-//! stricter API, users can give drivers flexibility in how circuit synthesis is
+//! stricter API, users can give drivers flexibility in how circuit execution is
 //! performed---permitting aggressive parallelization, memoization and other
 //! optimizations. Routines use [`WireMap`](crate::convert::WireMap) to
 //! translate gadgets from one driver to another during these conversions.
@@ -60,9 +62,10 @@ use crate::{
     routines::Routine,
 };
 
-/// Alias for the concrete [`Maybe<T>`] type for a driver `D`, used to represent input data
-/// that may or may not be available. This provides a uniform interface for both public
-/// and private data.
+/// Alias for the concrete [`Maybe<T>`] type for a driver `D`.
+///
+/// Circuit APIs use this for witness input, witness data, and public instance
+/// data that may or may not be available in a particular driver context.
 pub type DriverValue<D, T> = Perhaps<<D as DriverTypes>::MaybeKind, T>;
 
 /// Associated types and low-level gate allocation for a [`Driver`], without
@@ -95,8 +98,8 @@ pub trait DriverTypes {
     /// The type of wire that this driver provides.
     type ImplWire: Clone;
 
-    /// The kind of [`Maybe<T>`] types for witness values that this driver
-    /// expects.
+    /// The kind of [`Maybe<T>`] types for driver-managed values, including
+    /// witness input, witness data, and public instance data.
     type MaybeKind: MaybeKind;
 
     /// The concrete [`LinearExpression`] type used by [`Driver::add`].
@@ -143,8 +146,8 @@ pub trait DriverTypes {
     /// # Purity
     ///
     /// The `Fn` bound signals that this closure should be side-effect-free:
-    /// synthesis must produce identical constraints regardless of whether the
-    /// driver invokes it. `Fn` prevents accidental `&mut` captures but does not
+    /// emitted constraints must be identical regardless of whether the driver
+    /// invokes it. `Fn` prevents accidental `&mut` captures but does not
     /// prevent interior mutability; for drivers with `MaybeKind = Empty`, the
     /// [`Maybe`]/[`DriverValue`] system provides a
     /// stronger guarantee—those drivers never call this closure, and its body
@@ -172,14 +175,13 @@ pub trait DriverTypes {
     ) -> Result<Self::ImplWire>;
 }
 
-/// A context for executing cryptographic algorithms and synthesizing their
-/// corresponding arithmetic circuits.
+/// A context for executing cryptographic algorithms and emitting their
+/// corresponding arithmetic-circuit constraints.
 ///
-/// Drivers are used to write code that is intended to be synthesized into
-/// arithmetic circuits over a field determined by the [`Driver::F`] associated
-/// type. Arithmetic circuits are represented in Ragu (equivalently) as a set of
-/// wires for gates and a set of constraints placed on
-/// their assigned field values to encode addition gates.
+/// Drivers are used to write code that emits arithmetic-circuit constraints
+/// over a field determined by the [`Driver::F`] associated type. Arithmetic
+/// circuits are represented in Ragu as multiplication gates, linear
+/// constraints, coefficients, and wire references over assigned field values.
 ///
 /// ## Usage
 ///
@@ -189,12 +191,13 @@ pub trait DriverTypes {
 ///   existing wires. The [`constant`](Driver::constant) method is a helper for
 ///   creating a wire with a constant value.
 /// * Wires are assigned values upon their creation; the driver may or may not
-///   need to obtain these values depending on whether or not a witness for them
-///   is expected.
+///   need to obtain these values depending on whether witness generation is
+///   active.
 /// * Users keep track of wire assignments or related witness data using a
 ///   driver-specific [`DriverValue`] type. This type implements an
 ///   `Option`-like abstraction called [`Maybe`] which allows for compile-time
-///   optimization and static analysis of witness data computation and memory.
+///   optimization and static analysis of witness-generation computation and
+///   memory.
 /// * Finally, and most importantly, wires can be constrained in two ways:
 ///     * The [`mul`](Driver::mul) method enforces a multiplicative constraint
 ///       on the created wires; the wires are the inputs and output of a
@@ -206,8 +209,9 @@ pub trait DriverTypes {
 ///
 /// Drivers are parameterized by a lifetime `'dr`. Routines are constrained to
 /// outlive this lifetime so that references to non-`'static` parameters or
-/// witness data can be placed inside of them while still allowing drivers to
-/// use multithreaded execution. See the [book section on `'dr`][dr-lifetime]
+/// driver-managed values can be placed inside of them while still allowing
+/// drivers to use multithreaded execution. See the [book section on
+/// `'dr`][dr-lifetime]
 /// for more detail.
 ///
 /// [dr-lifetime]: https://tachyon.z.cash/ragu/guide/drivers/#the-dr-lifetime
@@ -257,8 +261,8 @@ pub trait Driver<'dr>: DriverTypes<ImplWire = Self::Wire, ImplField = Self::F> +
     /// # Purity
     ///
     /// The `Fn` bound signals that this closure should be side-effect-free:
-    /// synthesis must produce identical constraints regardless of whether the
-    /// driver invokes it. `Fn` prevents accidental `&mut` captures but does not
+    /// emitted constraints must be identical regardless of whether the driver
+    /// invokes it. `Fn` prevents accidental `&mut` captures but does not
     /// prevent interior mutability; for drivers with `MaybeKind = Empty`, the
     /// [`Maybe`]/[`DriverValue`] system provides a stronger guarantee—those
     /// drivers never call this closure, and its body is dead-code-eliminated
@@ -272,11 +276,11 @@ pub trait Driver<'dr>: DriverTypes<ImplWire = Self::Wire, ImplField = Self::F> +
     }
 
     /// Asks the driver to create a virtual wire that is the linear combination
-    /// of some existing wires. This may impose some runtime cost for circuit
-    /// synthesis depending on the driver. However, it is relatively "free" to
-    /// perform this operation as it does not require an actual constraint to be
-    /// created, since unlimited fan-in addition gates do not have a cost in
-    /// `ragu`'s circuit model.
+    /// of some existing wires. This may impose some runtime cost depending on
+    /// the driver. However, it is relatively "free" to perform this operation
+    /// as it does not require an actual constraint to be created, since
+    /// unlimited fan-in addition gates do not have a cost in `ragu`'s circuit
+    /// model.
     ///
     /// The provided closure _may_ be called to obtain the linear combination.
     ///
@@ -297,7 +301,7 @@ pub trait Driver<'dr>: DriverTypes<ImplWire = Self::Wire, ImplField = Self::F> +
     /// # Purity
     ///
     /// The `Fn` bound signals purity for the same reasons as
-    /// [`add`](Driver::add); the driver-supplied
+    /// [`add`](Driver::add); the driver-provided
     /// [`LCenforce`](DriverTypes::LCenforce) argument may itself carry
     /// interior-mutable state (as a driver implementation detail), but circuit
     /// code should not introduce its own observable side effects.
@@ -308,12 +312,12 @@ pub trait Driver<'dr>: DriverTypes<ImplWire = Self::Wire, ImplField = Self::F> +
         self.enforce_zero(|lc| lc.add(a).sub(b))
     }
 
-    /// Proxy for the `Input::just` method for this driver.
+    /// Proxy for the [`Maybe::just`] method for this driver.
     fn just<R: Send>(f: impl FnOnce() -> R) -> DriverValue<Self, R> {
         <DriverValue<Self, R> as Maybe<R>>::just(f)
     }
 
-    /// Proxy for the `Witness::try_just` method for this driver.
+    /// Proxy for the [`Maybe::try_just`] method for this driver.
     fn try_just<R: Send>(f: impl FnOnce() -> Result<R>) -> Result<DriverValue<Self, R>> {
         <DriverValue<Self, R> as Maybe<R>>::try_just(f)
     }

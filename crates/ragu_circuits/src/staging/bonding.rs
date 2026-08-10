@@ -55,11 +55,18 @@ where
     ///
     /// The circuit must declare `Output = ()`. Non-empty output would
     /// be serialized into output-binding constraints by the standard
-    /// synthesis path, contributing to $k(Y)$ and violating the bonding
-    /// invariant that $k(Y) \equiv 0$. This is enforced at the type level.
+    /// constraint-emission path, contributing to $k(Y)$ and violating the
+    /// bonding requirement that $k(Y) \equiv 0$. The `Output = ()` bound makes
+    /// this a type-level requirement.
     ///
     /// The `ONE`-wire contribution is stripped so that the constant term in $Y$
     /// is zero, as required of a bonding polynomial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if the supplied circuit violates the structural
+    /// restrictions above by using the `ONE` wire, emitting a gate, or allocating
+    /// a constant after the stage builder is finalized.
     ///
     /// [`Driver::gate`]: ragu_core::drivers::DriverTypes::gate
     /// [`Driver::mul`]: ragu_core::drivers::Driver::mul
@@ -72,7 +79,7 @@ where
         Self: 'a,
         S: MultiStageCircuit<F, R, Output = ()>,
     {
-        // Validate: run synthesis with a driver that rejects ONE usage
+        // Validate: run constraint emission with a driver that rejects ONE usage
         // and — after the stage builder finalizes — mul/gate.
         let mut validator = BondingValidator::<F>::new();
         self.circuit.witness(

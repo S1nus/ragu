@@ -2,9 +2,9 @@
 //! as output.
 //!
 //! Routines are intended for portions of the circuit that are either invoked
-//! multiple times (and so drivers can memoize their synthesis) or have
+//! multiple times (and so drivers can memoize their emitted constraints) or have
 //! efficiently predictable outputs (and so drivers can parallelize their
-//! synthesis).
+//! witness generation).
 //!
 //! See also the [book] for a user-oriented introduction to routines.
 //!
@@ -27,10 +27,10 @@ use crate::{
 /// predicted then at least any auxiliary data that may be useful for execution
 /// can be returned.
 ///
-/// The actual synthesis of a routine is performed in the
+/// The routine body is performed in the
 /// [`execute`](Routine::execute) method. Drivers can leverage predictions to
-/// execute routines in parallel (for witness generation) or skip execution if
-/// synthesis is memoized.
+/// execute routines in parallel for witness generation or skip constraint
+/// emission when the emitted constraints are memoized.
 pub trait Routine<F: Field>: Clone + Send {
     /// The kind of a gadget that this routine expects as input
     type Input: GadgetKind<F>;
@@ -63,10 +63,10 @@ pub trait Routine<F: Field>: Clone + Send {
     ///
     /// # Errors
     ///
-    /// An `Err` return signals an unrecoverable failure—for example, missing
-    /// witness data or malformed input—and must be propagated by drivers. Use
-    /// [`Prediction::Unknown`] instead when the routine simply cannot
-    /// efficiently predict its output.
+    /// Returns a witness-generation error if the prediction cannot be
+    /// computed from available witness input, or an input error if ordinary
+    /// input to the routine is outside its domain. Use [`Prediction::Unknown`]
+    /// instead when the routine simply cannot efficiently predict its output.
     fn predict<'dr, D: Driver<'dr, F = F, Wire = ()>>(
         &self,
         dr: &mut D,
@@ -82,14 +82,15 @@ pub trait Routine<F: Field>: Clone + Send {
 ///
 /// # Design note
 ///
-/// [`Routine::predict`] is witness-oriented, but circuit synthesis drivers
-/// piggyback on it just for the auxiliary data. This bundles two concerns:
+/// [`Routine::predict`] is witness-generation oriented, but constraint-only
+/// drivers piggyback on it just for the auxiliary data. This bundles two
+/// concerns:
 ///
 /// - **Auxiliary data**: all drivers can benefit from avoiding redundant work.
 /// - **`Known` vs `Unknown`**: witness drivers can use this to short-circuit
 ///   execution or parallelize witness generation.
 ///
-/// Circuit synthesis drivers use [`into_aux`] to ignore this distinction.
+/// Constraint-only drivers use [`into_aux`] to ignore this distinction.
 ///
 /// [`into_aux`]: Prediction::into_aux
 pub enum Prediction<T, A> {
@@ -105,8 +106,9 @@ pub enum Prediction<T, A> {
 impl<T, A> Prediction<T, A> {
     /// Extract auxiliary data, discarding the output prediction.
     ///
-    /// Circuit synthesis drivers don't care whether the output was predicted, they
-    /// always call [`Routine::execute`] anyway. This helper makes that explicit.
+    /// Constraint-only drivers do not care whether the output was predicted;
+    /// they always call [`Routine::execute`] anyway. This helper makes that
+    /// explicit.
     pub fn into_aux(self) -> A {
         match self {
             Prediction::Known(_, aux) | Prediction::Unknown(aux) => aux,

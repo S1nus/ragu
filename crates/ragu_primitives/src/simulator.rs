@@ -1,7 +1,8 @@
-//! Simulation driver for testing and constraint verification.
+//! Simulation driver for testing and local constraint checks.
 //!
-//! Provides a [`Simulator`] driver that fully executes circuit synthesis,
-//! tracking constraint counts and enforcing constraint satisfaction.
+//! Provides a [`Simulator`] driver that executes circuit code with witness
+//! input, tracks constraint counts, and returns local-check errors for
+//! unsatisfied constraints.
 
 use ragu_arithmetic::{Coeff, ff::Field};
 use ragu_core::{
@@ -12,9 +13,8 @@ use ragu_core::{
     routines::Routine,
 };
 
-/// A driver that fully simulates circuit synthesis, enforcing constraint
-/// satisfaction and tracking gate and constraint counts. Primarily used
-/// for testing.
+/// A driver that simulates circuit execution, checks constraint satisfaction,
+/// and tracks gate and constraint counts. Primarily used for testing.
 #[derive(Clone)]
 pub struct Simulator<F: Field> {
     num_gates: usize,
@@ -58,7 +58,8 @@ impl<F: Field> Simulator<F> {
         self.num_constraints
     }
 
-    /// Execute the provided closure with a fresh `Simulator` driver.
+    /// Executes the provided closure with a fresh `Simulator` driver, returning
+    /// any error from the closure.
     pub fn simulate<W: Send>(
         witness: W,
         f: impl FnOnce(&mut Self, Always<W>) -> Result<()>,

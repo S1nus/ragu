@@ -22,15 +22,17 @@ use crate::{
     io::{Buffer, Write},
 };
 
-/// Represents a wire and its corresponding field element value, but generally
-/// does not guarantee any particular constraint has been imposed on the wire.
-/// Also represents the fundamental code unit of serialization using the
+/// Represents a wire and its witness value.
+///
+/// `Element` is a basic wire wrapper. It does not impose an additional wire
+/// contract beyond the wire assignment represented by the driver. It also
+/// represents the fundamental code unit of serialization using the
 /// [`Write`] trait.
 ///
 /// ## Usage
 ///
 /// Elements can be allocated ([`Element::alloc`], [`Element::alloc_square`])
-/// with a provided witness assignment. Any constant field element can be turned
+/// with a provided witness value. Any constant field element can be turned
 /// into an [`Element`] without an allocation using [`Element::constant`] (or
 /// [`Element::one`] for the unitary case).
 ///
@@ -51,18 +53,18 @@ use crate::{
 /// bare wire instead of a demoted gadget to encourage this.
 #[derive(Gadget, Consistent)]
 pub struct Element<'dr, D: Driver<'dr>> {
-    /// A wire created by the driver
+    /// A wire created by the driver.
     #[ragu(wire)]
     wire: D::Wire,
 
-    /// The witness value for the assignment of this wire
+    /// Witness data for this wire.
     #[ragu(value)]
     value: DriverValue<D, D::F>,
 }
 
 impl<'dr, D: Driver<'dr>> Element<'dr, D> {
-    /// Allocates an element with the provided witness assignment, using the
-    /// supplied [`Allocator`] to create the underlying wire.
+    /// Allocates an element with the provided witness value, using the
+    /// provided [`Allocator`] to create the underlying wire.
     ///
     /// This costs one allocation.
     pub fn alloc<A: Allocator<'dr, D>>(
@@ -78,10 +80,15 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
         })
     }
 
-    /// Allocates an element $a$ with the provided witness assignment and
+    /// Allocates an element $a$ with the provided witness value and
     /// squares it in a single step. Returns $(a, a^2)$.
     ///
     /// This costs one gate.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the second returned element represent
+    /// the square of the first.
     pub fn alloc_square(dr: &mut D, assignment: DriverValue<D, D::F>) -> Result<(Self, Self)> {
         let square = D::just(|| assignment.snag().square());
         let (a, b, c) = dr.mul(|| {
@@ -130,16 +137,18 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
         Element { value, wire }
     }
 
-    /// Constructs a new element from a wire and a witness value. **It is the
-    /// caller's responsibility to ensure that the provided witness value is
-    /// consistent with the provided wire's actual assignment.** If they disagree,
-    /// other witness logic could produce assignments that violate constraints.
+    /// Constructs an element from an existing wire and witness data.
+    ///
+    /// # Witness Consistency
+    ///
+    /// If witness data is present, the value must match the represented wire
+    /// assignment. If it does not, later witness generation may compute
+    /// values that violate the constraints.
     pub fn promote(wire: D::Wire, value: DriverValue<D, D::F>) -> Self {
         Element { wire, value }
     }
 
-    /// Returns the value of this element. The caller can rely on this being
-    /// consistent with the underlying wire's value.
+    /// Returns the witness value paired with this element.
     pub fn value(&self) -> DriverValue<D, &D::F> {
         self.value.as_ref()
     }
@@ -149,7 +158,12 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
         &self.wire
     }
 
-    /// Multiply two elements together.
+    /// Multiplies two elements together.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * other`.
     pub fn mul(&self, dr: &mut D, other: &Self) -> Result<Self> {
         let product = D::just(|| {
             let a = *self.value.snag();
@@ -174,11 +188,20 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     }
 
     /// Squares an element.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * self`.
     pub fn square(&self, dr: &mut D) -> Result<Self> {
         self.mul(dr, self)
     }
 
     /// Enforces that this element equals zero.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes this element represent zero.
     pub fn enforce_zero(&self, dr: &mut D) -> Result<()> {
         dr.enforce_zero(|lc| lc.add(&self.wire))
     }
@@ -237,23 +260,46 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
 
     /// Returns an [`Invertible`] for this element.
     ///
-    /// This will be unsatisfied (and fail to synthesize) if this element is
-    /// zero.
-    ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
     pub fn enforce_invertible(&self, dr: &mut D) -> Result<Invertible<'dr, D>> {
         let invertible = Invertible::alloc(dr, self.value.clone())?;
         self.enforce_equal(dr, invertible.element())?;
         Ok(invertible)
     }
 
-    /// Returns an [`Invertible`] for this element, using the supplied
+    /// Returns an [`Invertible`] for this element, using the provided
     /// `inverse_value` as advice about what this element's inverse is.
     ///
-    /// This will be unsatisfied if this element is zero or if the provided
-    /// `inverse_value` is not really its multiplicative inverse.
-    ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero, and the
+    /// returned inverse represents its multiplicative inverse.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero and `inverse_value` matches its inverse.
+    ///
+    /// # Errors
+    ///
+    /// A checking driver returns a local-check error if witness input for
+    /// `inverse_value` does not satisfy the emitted constraints.
     pub fn enforce_invertible_with(
         &self,
         dr: &mut D,
@@ -264,12 +310,23 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
         Ok(invertible)
     }
 
-    /// Constrains this element to be nonzero and returns it as a [`Nonzero`].
-    ///
-    /// This will be unsatisfied (and fail to synthesize) if this element is
-    /// zero.
+    /// Enforces this element's nonzeroness and returns it as a [`Nonzero`].
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the returned element zero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
     pub fn enforce_nonzero(self, dr: &mut D) -> Result<Nonzero<'dr, D>> {
         Ok(self.enforce_invertible(dr)?.into_element())
     }
@@ -279,25 +336,49 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     /// Convenience over [`Self::enforce_invertible`] for callers that only
     /// need the inverse [`Element`].
     ///
-    /// This will be unsatisfied (and fail to synthesize) if this element is
-    /// zero.
-    ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self^{-1}`.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input for this element
+    /// is zero.
     pub fn invert(&self, dr: &mut D) -> Result<Self> {
         self.enforce_invertible(dr)
             .map(|inv| inv.into_inverse().into_inner())
     }
 
-    /// Returns the multiplicative inverse of this element, using the supplied
+    /// Returns the multiplicative inverse of this element, using the provided
     /// `inverse_value` as advice about what this element's inverse is.
     ///
     /// Convenience over [`Self::enforce_invertible_with`] for callers that
     /// only need the inverse [`Element`].
     ///
-    /// This will be unsatisfied if this element is zero or if the provided
-    /// `inverse_value` is not really its multiplicative inverse.
-    ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self^{-1}`.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for this element is
+    /// nonzero and `inverse_value` matches its inverse.
+    ///
+    /// # Errors
+    ///
+    /// A checking driver returns a local-check error if witness input for
+    /// `inverse_value` does not satisfy the emitted constraints.
     pub fn invert_with(&self, dr: &mut D, inverse_value: DriverValue<D, D::F>) -> Result<Self> {
         self.enforce_invertible_with(dr, inverse_value)
             .map(|inv| inv.into_inverse().into_inner())
@@ -306,6 +387,16 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     /// Divides this element by `divisor` and returns the quotient.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self / divisor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the quotient assignment cannot
+    /// be computed from witness input.
     pub fn divide(&self, dr: &mut D, divisor: &Nonzero<'dr, D>) -> Result<Self> {
         let quotient_value = D::try_just(|| {
             Ok(*self.value().take()
@@ -338,6 +429,11 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     }
 
     /// Returns a boolean indicating whether this element is zero.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned boolean represent whether
+    /// this element is zero.
     pub fn is_zero(
         &self,
         dr: &mut D,
@@ -347,6 +443,11 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     }
 
     /// Returns a boolean indicating whether this element equals another.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned boolean represent whether
+    /// `self == other`.
     pub fn is_equal(
         &self,
         dr: &mut D,
@@ -363,6 +464,11 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     /// Horner's method is used to evaluate the weighted sum, effectively
     /// scaling the first element by the highest power of `scale_factor` and the
     /// last element by nothing at all.
+    ///
+    /// # Constraints
+    ///
+    /// The iterator length determines the emitted constraints. The length must
+    /// not be derived from witness input.
     pub fn fold<E: Borrow<Element<'dr, D>>>(
         dr: &mut D,
         elements: impl IntoIterator<Item = E>,
@@ -378,7 +484,17 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
         })
     }
 
-    /// Constrains that `self` is a $2^k$-th root of unity, i.e., $\mathtt{self}^{2^k} = 1$.
+    /// Enforces that `self` is a $2^k$-th root of unity, i.e.,
+    /// $\mathtt{self}^{2^k} = 1$.
+    ///
+    /// # Constraints
+    ///
+    /// `k` determines the emitted constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes this element represent a $2^k$-th root
+    /// of unity.
     pub fn enforce_root_of_unity(&self, dr: &mut D, k: u32) -> Result<()> {
         let mut value = self.clone();
         for _ in 0..k {
@@ -394,6 +510,11 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     ///
     /// This is more efficient than [`Element::fold`] with scale=1 because it
     /// avoids gates.
+    ///
+    /// # Constraints
+    ///
+    /// The iterator length determines the emitted virtual wire expression. The
+    /// length must not be derived from witness input.
     pub fn sum<E: Borrow<Element<'dr, D>>>(
         dr: &mut D,
         elements: impl IntoIterator<Item = E>,
@@ -458,6 +579,11 @@ impl<'dr, D: Driver<'dr>, B: Buffer<'dr, D>> Buffer<'dr, D> for &mut B {
 }
 
 /// Computes a fixed linear combination of some allocated values.
+///
+/// # Constraints
+///
+/// The number of values determines the emitted virtual wire expression. The
+/// length must not be derived from witness input.
 ///
 /// # Panics
 ///

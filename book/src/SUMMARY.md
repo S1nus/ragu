@@ -52,6 +52,7 @@
     - [Wiring and Instance Polynomials](protocol/local/wiring.md)
 - [Part III: Implementation]()
   - [Architecture Overview](implementation/arch.md) <!-- todo -->
+  - [Documenting Circuit Code](implementation/circuit-code-documentation.md)
   - [Circuits](implementation/circuits.md) <!-- todo -->
   - [Polynomial Management](implementation/polynomials.md) <!-- todo -->
   - [PCD Step and Proofs](implementation/proofs.md) <!-- todo -->

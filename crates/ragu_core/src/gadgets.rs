@@ -1,19 +1,18 @@
-//! Stateful abstractions for algorithms and protocols that are synthesized into
-//! arithmetic circuits.
+//! Stateful abstractions for algorithms and protocols that emit arithmetic
+//! circuit constraints.
 //!
 //! ## Design
 //!
-//! Gadgets are types that encapsulate wires and witness data used to compute
-//! assignments. Because the underlying types are defined by drivers, gadget
-//! types are necessarily parameterized by a [`Driver`]. As with all circuit
-//! code, gadgets must synthesize deterministically independently of the
-//! concrete driver.
+//! Gadgets are types that encapsulate wires and witness data.
+//! Because the underlying types are defined by drivers, gadget types are
+//! necessarily parameterized by a [`Driver`]. As with all circuit code, gadgets
+//! must emit constraints deterministically.
 //!
-//! Witness types are driver-defined and their contents can only be extracted by
-//! the driver, so no gadget can convey invariants about witness data. In
-//! contrast, while wire types are also opaque handles defined by the driver,
-//! gadgets *can* convey invariants about the constraints placed over their
-//! wires.
+//! Witness data is carried through driver-defined types whose contents can only
+//! be extracted through the driver, so no gadget can enforce facts about that
+//! data itself. In contrast, while wire types are also opaque handles defined by
+//! the driver, gadgets can carry **wire contracts**: facts about the assignments
+//! of their wires that are enforced or derived by constraints.
 //!
 //! The [`Gadget`] trait is implemented for gadgets instantiated over a driver;
 //! the [`GadgetKind`] trait relates gadgets instantiated over different
@@ -38,12 +37,12 @@
 //! [`Gadget`] is a trait for gadgets with a stricter property called
 //! **fungibility**: for any two instances `a` and `b` of the same concrete
 //! gadget type, substituting `a`'s corresponding wire assignments for `b`'s
-//! must yield an instance indistinguishable in all subsequent synthesis from
-//! `a`, carrying identical invariants over those wires.
+//! must yield an instance indistinguishable in all subsequent constraint
+//! emission from `a`, carrying the same wire contracts.
 //!
 //! One of the direct consequences of fungibility is that a [`Gadget`] impl must
 //! always contain the same number of wires in every instance, and cannot carry
-//! any additional state that would influence synthesis behavior. It also means
+//! any additional state that would influence emitted constraints. It also means
 //! that gadgets usually cannot be `enum`s. Fortunately, most gadgets only
 //! contain wires, witness data and other gadgets. These simple gadgets always
 //! qualify as fungible by definition.
@@ -137,12 +136,12 @@ impl<'a, 'dr, D: Driver<'dr>> WireEqualizer<'a, 'dr, D> {
 ///
 /// For any two instances `a` and `b` of the same concrete gadget type,
 /// substituting `a`'s corresponding wire assignments for `b`'s must yield an
-/// instance indistinguishable in all subsequent synthesis from `a`, carrying
-/// identical invariants over those wires. This precludes dynamic-length
+/// instance indistinguishable in all subsequent constraint emission from `a`,
+/// carrying the same wire contracts. This precludes dynamic-length
 /// collections, enum discriminants, and any other instance state that affects
-/// synthesis. Wires are fungible by definition, and witness data cannot affect
-/// synthesis, so gadgets containing only these automatically satisfy this
-/// requirement.
+/// emitted constraints. Wires are fungible by definition, and witness data
+/// cannot affect emitted constraints, so gadgets containing only these
+/// automatically satisfy this requirement.
 ///
 /// The wire correspondence used here is defined by
 /// [`GadgetKind::map_gadget`]. Its traversal must be the same for every
@@ -186,10 +185,6 @@ pub trait Gadget<'dr, D: Driver<'dr>>: Clone {
     /// Gadgets do not vary in the number of wires they contain, so this
     /// returns the same quantity regardless of the specific instance of this
     /// [`Gadget`] implementation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying [`GadgetKind::map_gadget`] fails.
     fn num_wires(&self) -> Result<usize> {
         struct WireCounter<Src: DriverTypes> {
             count: usize,

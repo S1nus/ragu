@@ -1,8 +1,8 @@
 //! # `ragu_circuits`
 //!
-//! This crate contains traits and utilities for synthesizing arithmetic
-//! circuits into polynomials for the Ragu project. This API is re-exported (as
-//! necessary) in other crates and so this crate is only intended to be used
+//! This crate contains traits and utilities for reducing arithmetic-circuit
+//! constraints to polynomials for the Ragu project. This API is re-exported
+//! as necessary in other crates and so this crate is only intended to be used
 //! internally by Ragu.
 
 #![no_std]
@@ -55,7 +55,7 @@ use ragu_primitives::io::Write;
 /// Bundles a primary value with auxiliary data.
 ///
 /// Returned by [`Circuit::witness`] and [`CircuitExt::trace`] to pair the
-/// circuit's output with any auxiliary data produced during synthesis.
+/// circuit's output with any auxiliary data produced during witness generation.
 /// Most circuits set `Aux = ()` and callers can use [`into_output`] to
 /// discard the auxiliary component, [`into_aux`] to discard the output,
 /// or [`into_parts`] to destructure both.
@@ -96,7 +96,7 @@ impl<O, A> WithAux<O, A> {
 /// restored across routine boundaries.
 ///
 /// Provides [`with_scope`](Self::with_scope), which saves
-/// [`scope`](Self::scope), replaces it with a caller-supplied value, runs a
+/// [`scope`](Self::scope), replaces it with a caller-provided value, runs a
 /// closure with `&mut self`, then restores the original value. This isolates
 /// driver state within routines.
 pub(crate) trait DriverScope<S> {
@@ -114,6 +114,11 @@ pub(crate) trait DriverScope<S> {
 }
 
 /// Core trait for arithmetic circuits.
+///
+/// Implementations must emit constraints deterministically from ordinary input
+/// such as type parameters, constants, and iterator lengths. Values carried
+/// through [`DriverValue`] may determine witness generation and auxiliary data,
+/// but not which constraints are emitted.
 pub trait Circuit<F: Field>: Sized + Send + Sync {
     /// The type of data that is needed to construct the expected output of this
     /// circuit.
@@ -129,14 +134,15 @@ pub trait Circuit<F: Field>: Sized + Send + Sync {
 
     /// Auxiliary data produced during the computation of the
     /// [`witness`](Circuit::witness) method that may be useful, such as
-    /// interstitial witness material that is needed for future synthesis.
+    /// interstitial witness data needed by later computations.
     type Aux<'source>: Send;
 
-    /// Given an instance type for this circuit, use the provided [`Driver`] to
-    /// return a `Self::Output` gadget that the _some_ corresponding witness
-    /// should have produced as a result of the [`witness`](Circuit::witness)
-    /// method. This can be seen as "short-circuiting" the computation involving
-    /// the witness, which a verifier would not have in its possession.
+    /// Given public instance data for this circuit, uses the provided
+    /// [`Driver`] to return the verifier-visible `Self::Output` gadget.
+    ///
+    /// This method describes the public output that a corresponding
+    /// [`witness`](Circuit::witness) call must produce, without requiring
+    /// the private witness input itself.
     fn instance<'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: &mut D,
@@ -145,10 +151,9 @@ pub trait Circuit<F: Field>: Sized + Send + Sync {
     where
         Self: 'dr;
 
-    /// Given a witness type for this circuit, perform a computation using the
-    /// provided [`Driver`] and return the `Self::Output` gadget that the verifier's
-    /// instance should produce as a result of the
-    /// [`instance`](Circuit::instance) method.
+    /// Given witness input for this circuit, emits constraints using the
+    /// provided [`Driver`] and returns the verifier-visible `Self::Output`
+    /// gadget plus auxiliary witness data.
     fn witness<'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: &mut D,
@@ -200,7 +205,7 @@ pub(crate) trait WiringObject<F: Field, R: Rank>: Send + Sync {
     fn sy(&self, y: F, floor_plan: &[floor_planner::ConstraintSegment])
     -> sparse::Polynomial<F, R>;
 
-    /// Returns per-segment constraint records in DFS synthesis order.
+    /// Returns per-segment constraint records in DFS emission order.
     ///
     /// These records serve as input to [`floor_planner::floor_plan`] for
     /// computing absolute constraint offsets.

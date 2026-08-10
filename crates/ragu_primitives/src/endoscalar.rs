@@ -39,13 +39,21 @@ pub struct Endoscalar<'dr, D: Driver<'dr>> {
     #[ragu(gadget)]
     bits: FixedVec<Demoted<'dr, D, Boolean<'dr, D>>, ConstLen<{ u128::BITS as usize }>>,
 
-    /// The represented endoscalar witness value in compact representation.
+    /// Witness data for the represented endoscalar in compact representation.
     #[ragu(value)]
     value: DriverValue<D, u128>,
 }
 
 impl<'dr, D: Driver<'dr>> Endoscalar<'dr, D> {
-    /// Allocate an endoscalar with the provided witness value.
+    /// Allocates an endoscalar with the provided witness input value.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes each stored bit represent `0` or `1`.
+    /// Nothing ties those bits to `value`, which is witness input: witness
+    /// generation decomposes it in little-endian order, but callers needing the
+    /// endoscalar bound to a specific field element must enforce that relation
+    /// themselves (see [`extract`](Self::extract)).
     pub fn alloc(dr: &mut D, value: DriverValue<D, u128>) -> Result<Self> {
         let bits = (0..u128::BITS as usize)
             .map(|i| {
@@ -77,12 +85,14 @@ impl<'dr, D: Driver<'dr>> Endoscalar<'dr, D> {
     ///
     /// # Soundness
     ///
-    /// A single extracted bit is under-constrained at the exceptional inputs
-    /// `elem = -i` (`0 <= i < 128`), where `elem + i == 0`: both quadratic-residue
-    /// branches are then zero, which is a square, so a malicious prover can flip
-    /// that bit. This is unreachable when `elem` is a transcript-derived challenge
-    /// (forcing `elem = -i` requires grinding ~`|F| / 128` hashes). [#765] tracks
-    /// the canonical bit-decomposition that closes the gap.
+    /// Any satisfying assignment makes each returned bit encode whether
+    /// `elem + i` is a quadratic residue for the corresponding bit position
+    /// `i`, except where `elem + i == 0`. At those exceptional inputs
+    /// (`elem = -i` for `0 <= i < 128`) both quadratic-residue branches are
+    /// zero, which is a square, so a malicious prover can flip that bit. This
+    /// is unreachable when `elem` is a transcript-derived challenge (forcing
+    /// `elem = -i` requires grinding ~`|F| / 128` hashes). [#765] tracks the
+    /// canonical bit-decomposition that closes the gap.
     ///
     /// [#765]: https://github.com/tachyon-zcash/ragu/issues/765
     pub fn extract<A: crate::allocator::Allocator<'dr, D>>(
@@ -167,6 +177,23 @@ impl<'dr, D: Driver<'dr>> Endoscalar<'dr, D> {
     /// $4(2^n - 1)^2$, which is comfortably safe for the Pasta fields because
     /// they are larger than $1361129467683753853705924477137396432900$. See
     /// `qa/lean/Ragu/Contrib/EndoscalarProof.lean`.
+    ///
+    /// # Exceptional Cases
+    ///
+    /// The incomplete point additions used by this method require distinct
+    /// x-coordinates at every addition step. The method uses an unchecked
+    /// [`NonzeroBank`] and relies on the no-collision argument above for the
+    /// supported curve/endoscalar setting.
+    ///
+    /// # Soundness
+    ///
+    /// Under the no-collision assumption above, any satisfying assignment makes
+    /// the returned point represent `p` scaled by this endoscalar.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input falls into an
+    /// incomplete-addition exceptional case.
     pub fn group_scale<C: CurveAffine<Base = D::F>>(
         &self,
         dr: &mut D,
@@ -202,6 +229,11 @@ impl<'dr, D: Driver<'dr>> Endoscalar<'dr, D> {
     }
 
     /// Lifts this endoscalar to a field element (scales $1$ by the endoscalar).
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent the
+    /// effective scalar for this endoscalar.
     pub fn lift(&self, dr: &mut D) -> Result<Element<'dr, D>>
     where
         D::F: WithSmallOrderMulGroup<3>,

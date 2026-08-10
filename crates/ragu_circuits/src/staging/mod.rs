@@ -1,4 +1,4 @@
-//! Staging circuits for multi-stage witness computation.
+//! Staging circuits for multi-stage witness generation.
 //!
 //! ## Background
 //!
@@ -97,11 +97,11 @@
 //!
 //! ### Final Stage
 //!
-//! The [`MultiStageCircuit`] trait implements the overall circuit witness (combining all stages),
-//! which is similar to the [`Circuit`] trait. The notable difference is that
-//! during witness generation the circuit has access to a [`StageBuilder`] which
-//! is used to load stages into the circuit synthesis according to the
-//! implementation's hierarchy.
+//! The [`MultiStageCircuit`] trait implements the overall circuit witness
+//! (combining all stages), which is similar to the [`Circuit`] trait. The
+//! notable difference is that during witness generation the circuit has access
+//! to a [`StageBuilder`] which is used to load stages into the circuit according
+//! to the implementation's hierarchy.
 //!
 //! Any implementation of [`MultiStageCircuit`] can be transformed into an
 //! implementation of [`Circuit`] using the [`MultiStage`] adaptor. The resulting
@@ -115,24 +115,21 @@
 //! Assuming stages are well-formed, they can be combined by merely adding them
 //! together with the final staging polynomial, producing the desired $r(X)$.
 //!
-//! ## Gadget invariants
+//! ## Stage Output Contracts
 //!
-//! Even if gadgets are fungible, any driver that modifies the wires of a
-//! gadget risks breaking one of their invariants. [`Stage::witness`] only
-//! guarantees to produce a gadget with the correct shape, but the prover
-//! could lie and produce one that does not satisfy the invariants.
-//! [`unenforced`](StageGuard::unenforced) takes the prover at their word,
-//! or possibly relies on a different [`enforced`](StageGuard::enforced)
-//! call to check it. [`enforced`](StageGuard::enforced) provides only the
-//! guarantee that the gadget is
-//! [`Consistent`](ragu_primitives::consistent::Consistent), which is only
-//! implemented for gadgets that are capable of emitting constraints to
-//! re-express all of their invariants.
+//! Stage outputs are gadgets rebound onto pre-allocated stage wires.
+//! [`Stage::witness`] determines the canonical wire layout for the stage output,
+//! but the stage constraints themselves are not emitted into the consuming
+//! circuit. [`unenforced`](StageGuard::unenforced) therefore delegates the
+//! output gadget's wire contracts to some other circuit or external argument.
+//! [`enforced`](StageGuard::enforced) calls
+//! [`Consistent`](ragu_primitives::consistent::Consistent) to re-emit the wire
+//! contracts that `Consistent` covers in the consuming circuit.
 //!
 //! When called through [`StageBuilder`] (wire reservation and witness
 //! computation), `Stage::witness` runs on a wireless emulator where
 //! `gate`, `add`, and `enforce_zero` are all no-ops, so anything the
-//! body writes to the supplied driver is discarded. During polynomial
+//! body writes to the provided driver is discarded. During polynomial
 //! extraction in [`StageExt::rx`], `Stage::witness` instead runs on a
 //! wired emulator where `gate` and `add` execute to collect values;
 //! `enforce_zero` is still a no-op, so any constraints the body emits
@@ -172,9 +169,9 @@ use crate::{
 /// A partial trace component for a multi-stage circuit, producing a gadget of
 /// type [`OutputKind`](Self::OutputKind) over the wires it commits to.
 ///
-/// See the module-level [gadget invariants](self#gadget-invariants) section
-/// for what `Stage` and its consumers do and do not guarantee about the
-/// wires inside the produced gadget.
+/// See the module-level [stage output contracts](self#stage-output-contracts)
+/// section for what `Stage` and its consumers do and do not guarantee about
+/// the wires inside the produced gadget.
 pub trait Stage<F: Field, R: Rank> {
     /// The parent stage for this stage. This is set to `()` for the base stage.
     type Parent: Stage<F, R>;
@@ -196,14 +193,14 @@ pub trait Stage<F: Field, R: Rank> {
     /// Produce the stage's [`OutputKind`](Self::OutputKind) gadget and the
     /// wire values it commits to.
     ///
-    /// Guarantees only the shape of the returned gadget — see the
-    /// module-level [gadget invariants](self#gadget-invariants) section.
-    /// The framework invokes this method only on stub drivers: a
-    /// wireless emulator inside [`StageBuilder`] (where `gate`, `add`,
-    /// and `enforce_zero` are all no-ops) or a wired emulator inside
-    /// [`StageExt::rx`] (where `gate` and `add` execute to collect
-    /// values, but `enforce_zero` remains a no-op). Either way, any
-    /// constraints the body emits via `enforce_zero` are discarded.
+    /// This method determines the output gadget's wire layout — see the
+    /// module-level [stage output contracts](self#stage-output-contracts)
+    /// section. The framework invokes this method only on stub drivers: a
+    /// wireless emulator inside [`StageBuilder`] (where `gate`, `add`, and
+    /// `enforce_zero` are all no-ops) or a wired emulator inside
+    /// [`StageExt::rx`] (where `gate` and `add` execute to collect values, but
+    /// `enforce_zero` remains a no-op). Either way, constraints the body emits
+    /// via `enforce_zero` are discarded.
     fn witness<'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: &mut D,
@@ -276,16 +273,12 @@ pub trait MultiStageCircuit<F: Field, R: Rank>: Sized + Send + Sync {
     type Output: Write<F>;
 
     /// Auxiliary data produced during the computation of the
-    /// [`witness`](MultiStageCircuit::witness) method that may be useful, such as
-    /// interstitial witness material that is needed for future synthesis.
+    /// [`witness`](MultiStageCircuit::witness) method that may be useful, such
+    /// as interstitial witness data needed by later computations.
     type Aux<'source>: Send;
 
-    /// Given an instance type for this circuit, use the provided [`Driver`] to
-    /// return a `Self::Output` gadget that the _some_ corresponding witness
-    /// should have produced as a result of the
-    /// [`witness`](MultiStageCircuit::witness) method. This can be seen as
-    /// "short-circuiting" the computation involving the witness, which a
-    /// verifier would not have in its possession.
+    /// Given public instance data for this circuit, uses the provided
+    /// [`Driver`] to return the verifier-visible `Self::Output` gadget.
     fn instance<'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: &mut D,
@@ -294,10 +287,9 @@ pub trait MultiStageCircuit<F: Field, R: Rank>: Sized + Send + Sync {
     where
         Self: 'dr;
 
-    /// Given a witness type for this circuit, perform a computation using the
-    /// provided [`Driver`] and return the `Self::Output` gadget that the
-    /// verifier's instance should produce as a result of the
-    /// [`instance`](MultiStageCircuit::instance) method.
+    /// Given witness input for this circuit, emits constraints using the
+    /// provided [`StageBuilder`] and returns the verifier-visible `Self::Output`
+    /// gadget plus auxiliary witness data.
     fn witness<'a, 'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: StageBuilder<'a, 'dr, D, R, (), Self::Last>,
@@ -384,6 +376,12 @@ pub trait StageExt<F: Field, R: Rank>: Stage<F, R> {
     ///
     /// Pass a random field element in production; `F::ZERO` is acceptable
     /// in tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if the stage emits more wires than its
+    /// configured value count. Returns a witness-generation error if the
+    /// stage witness body cannot produce its output from witness input.
     fn rx_configured(
         &self,
         alpha: F,
@@ -441,6 +439,10 @@ pub trait StageExt<F: Field, R: Rank>: Stage<F, R> {
     /// SYSTEM gate carries only an alpha value in `a[0]` (no `d[0] = 1`
     /// ONE wire) and they are used solely for partial trace commitments.
     /// As a result, their mask must be computed differently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if the mask cannot be represented at rank `R`.
     fn mask<'a>() -> Result<BondingObject<'a, F, R>> {
         Ok(BondingObject::new(Box::new(mask::StageMask::new(
             Self::skip_gates(),
@@ -451,6 +453,10 @@ pub trait StageExt<F: Field, R: Rank>: Stage<F, R> {
     /// Creates a bonding polynomial that can be used to enforce well-formedness
     /// checks on any final trace (stage) that has this stage as its
     /// [`MultiStageCircuit::Last`] stage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if the mask cannot be represented at rank `R`.
     fn final_mask<'a>() -> Result<BondingObject<'a, F, R>> {
         Ok(BondingObject::new(Box::new(mask::StageMask::new_final(
             Self::skip_gates() + Self::num_gates(),

@@ -3,8 +3,8 @@
 //! # Background
 //!
 //! Circuits are fully described by [wiring polynomials] that encode their
-//! constraints, and all constraints are determined by a sequence
-//! of [`enforce_zero`] calls made during circuit synthesis. In each such call,
+//! constraints, and all constraints are determined by a sequence of
+//! [`enforce_zero`] calls made during constraint emission. In each such call,
 //! a new univariate polynomial in $X$ (representing the constraint over the
 //! wires) is added to $s(X, Y)$ as a separate term weighted by $Y$ to keep
 //! constraints linearly independent.
@@ -26,7 +26,7 @@
 //! matrices determined by the `enforce_zero` (and indirectly,
 //! [`add`](ragu_core::drivers::Driver::add)) calls.
 //!
-//! ### Circuit Synthesis
+//! ### Direct Evaluation
 //!
 //! Naively, one could pre-compute $s(X, Y)$ as a bivariate polynomial for each
 //! circuit and then evaluate it as needed. However, this is inefficient in both
@@ -34,25 +34,25 @@
 //! it written explicitly.
 //!
 //! The design of the [`Driver`] trait is meant to accommodate a direct
-//! synthesis approach, whereby the circuit code is interpreted by a specialized
+//! evaluation approach, whereby circuit code is interpreted by a specialized
 //! driver to evaluate $s(X, Y)$ at arbitrary points without ever constructing
 //! the full polynomial. Drivers define their own wire type, and so naturally we
-//! can represent wires as the (partial) polynomial evaluations they correspond
+//! can represent wires as the partial polynomial evaluations they correspond
 //! to. This can avoid unnecessary allocations and redundant arithmetic.
 //!
 //! ### Memoizations
 //!
 //! Further, because circuit code will often repeatedly invoke the same (or
-//! nearly identical) operations during synthesis, we can cache large portions
-//! of the intermediate polynomial evaluations produced and consumed by our
-//! specialized drivers. This behavior will vary by context, but two similar
+//! nearly identical) operations during constraint emission, we can cache large
+//! portions of the intermediate polynomial evaluations produced and consumed by
+//! our specialized drivers. This behavior will vary by context, but two similar
 //! sequences of operations may produce interstitial evaluations that are
 //! related by simple linear transformations.
 //!
 //! One of the purposes of the [`Routine`] trait is to allow circuit code to
-//! indicate which sections of synthesis are likely to be repeated with similar
-//! inputs and to provide guarantees about those inputs that drivers can safely
-//! exploit to memoize.
+//! indicate which sections of constraint emission are likely to be repeated
+//! with similar inputs and to provide guarantees about those inputs that
+//! drivers can safely exploit to memoize.
 //!
 //! ### Polynomial Encoding and Scope Jumps
 //!
@@ -67,9 +67,9 @@
 //! in $s(X, Y)$. Similarly, the $k$-th gate in segment $i$
 //! occupies absolute gate index $m\_{i} + k$.
 //!
-//! Because synthesis interleaves a segment's own constraints with nested
-//! routine calls that belong to *separate* segments, the running $Y$-power
-//! counter is **not** continuous across routine boundaries. When entering a
+//! Because constraint emission interleaves a segment's own constraints with
+//! nested routine calls that belong to *separate* segments, the running
+//! $Y$-power counter is **not** continuous across routine boundaries. When entering a
 //! routine for segment $i$, each evaluator jumps to $\ell\_{i}$ and restores
 //! the parent's offset on return.
 //!

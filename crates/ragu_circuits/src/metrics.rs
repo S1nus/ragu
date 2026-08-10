@@ -2,9 +2,9 @@
 //! fingerprinting.
 //!
 //! This module provides constraint system analysis by simulating circuit
-//! execution without computing actual values, counting the number of
-//! gates and constraints a circuit requires. It simultaneously
-//! computes Schwartz–Zippel fingerprints for each routine invocation via the
+//! execution without computing assignment values, counting the number of
+//! gates and constraints a circuit emits. It simultaneously computes
+//! Schwartz–Zippel fingerprints for each routine invocation via the
 //! merged [`Counter`] driver, which combines constraint counting with identity
 //! evaluation in a single DFS traversal.
 //!
@@ -12,8 +12,8 @@
 //!
 //! A routine's fingerprint is the tuple `(TypeId(Input), TypeId(Output),
 //! eval, num_mul, num_lc)`. The [`TypeId`] pairs cheaply narrow equivalence
-//! candidates by type; the constraint counts further partition by shape; the
-//! scalar confirms structural equivalence via random evaluation
+//! candidates by type; the constraint counts further partition by emitted
+//! constraints; the scalar confirms structural equivalence via random evaluation
 //! (Schwartz–Zippel).
 //!
 //! The fingerprint is wrapped in [`RoutineIdentity`], an enum that
@@ -27,9 +27,9 @@
 //! [`sxy::eval`](super::wiring::sxy::eval)) evaluated at deterministic
 //! pseudorandom points derived from a domain-separated BLAKE2b hash: four
 //! independent geometric sequences are assigned to the $a$, $b$, $c$, $d$
-//! wires and constraint values are accumulated via Horner's rule. If two routines produce
-//! the same fingerprint, they are structurally equivalent with overwhelming
-//! probability.
+//! wires and constraint values are accumulated via Horner's rule. If two
+//! routines produce the same fingerprint, they are structurally equivalent with
+//! overwhelming probability.
 //!
 //! [`TypeId`]: core::any::TypeId
 
@@ -74,8 +74,8 @@ pub enum RoutineIdentity {
 ///
 /// Two routines share a fingerprint when they have matching [`TypeId`] pairs,
 /// matching evaluation scalars, and matching constraint counts. The scalar is
-/// the low 64 bits of the field element produced by running the routine's
-/// synthesis on the `Counter` driver.
+/// the low 64 bits of the field element produced by running the routine on the
+/// `Counter` driver.
 ///
 /// The 64-bit truncation gives ~2^{-64} collision probability per pair,
 /// adequate for floor-planner equivalence classes. If fingerprints are
@@ -121,7 +121,7 @@ impl RoutineFingerprint {
     }
 }
 
-/// Constraint counts for one segment of the circuit, collected during synthesis.
+/// Constraint counts for one segment of the circuit.
 ///
 /// Each record captures the gates and constraints contributed
 /// by a single segment in DFS order. Segments are the primary boundary for
@@ -139,7 +139,7 @@ impl RoutineFingerprint {
 ///
 /// # Example
 ///
-/// Consider a circuit with this synthesis order:
+/// Consider a circuit with this constraint-emission order:
 ///
 /// ```text
 /// [c0]  RoutineA  [c1]  RoutineB{ [b0]  RoutineC  [b1] }  [c2]
@@ -198,7 +198,7 @@ pub struct CircuitMetrics {
     /// The degree of the instance polynomial $k(Y)$.
     pub(crate) degree_ky: usize,
 
-    /// Per-segment constraint records in DFS synthesis order.
+    /// Per-segment constraint records in DFS emission order.
     ///
     /// See [`SegmentRecord`] for the indexing convention: index 0 is the
     /// root segment (not backed by a [`Routine`]); indices 1+ each correspond

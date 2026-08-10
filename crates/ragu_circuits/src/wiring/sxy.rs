@@ -26,8 +26,9 @@
 //! can accumulate the result with a single multiply-add per constraint:
 //! `result = result * y + c_j`.
 //!
-//! The [`sx`] module reverses each routine's coefficient range after synthesis
-//! to align with the $Y$-power assignment that Horner's rule produces here.
+//! The [`sx`] module reverses each routine's coefficient range after
+//! constraint emission to align with the $Y$-power assignment that Horner's
+//! rule produces here.
 //!
 //! ### Memory Efficiency
 //!
@@ -84,8 +85,8 @@ struct SxyScope<F> {
 /// A [`Driver`] that computes the full evaluation $s(x, y)$.
 ///
 /// Given fixed evaluation points $x, y \in \mathbb{F}$, this driver interprets
-/// circuit synthesis operations to produce $s(x, y)$ as a single field element
-/// using Horner's rule (see [module documentation][`self`]). Each call to
+/// circuit operations to produce $s(x, y)$ as a single field element using
+/// Horner's rule (see [module documentation][`self`]). Each call to
 /// [`Driver::enforce_zero`] applies one Horner step:
 /// `result = result * y + coefficient`.
 ///
@@ -139,7 +140,7 @@ impl<F: Field, R: Rank> DriverScope<SxyScope<F>> for Evaluator<'_, F, R> {
 
 /// Configures associated types for the [`Evaluator`] driver.
 ///
-/// - `MaybeKind = Empty`: No witness values are needed; evaluation uses only
+/// - `MaybeKind = Empty`: No witness input is needed; evaluation uses only
 ///   the polynomial structure.
 /// - `LCadd` / `LCenforce`: Use [`DirectSum`] to accumulate linear combinations
 ///   as immediate field element sums.
@@ -309,7 +310,8 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
 ) -> Result<F> {
     // At x = 0 every monomial other than x^0 vanishes; the d[0] ONE wire
     // (at x^0) still contributes. Set x_inv = 0 so the running monomials
-    // stay zero through synthesis and the ONE wire still resolves to F::ONE.
+    // stay zero through constraint emission and the ONE wire still resolves to
+    // F::ONE.
     let x_inv = if x == F::ZERO {
         F::ZERO
     } else {
@@ -352,7 +354,7 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
     assert_eq!(
         evaluator.current_routine + 1,
         evaluator.floor_plan.len(),
-        "floor plan routine count must match synthesis"
+        "floor plan routine count must match constraint emission"
     );
     assert_eq!(
         evaluator.scope.gates, evaluator.floor_plan[0].num_gates,

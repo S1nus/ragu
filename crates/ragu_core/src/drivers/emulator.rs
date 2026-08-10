@@ -13,7 +13,7 @@
 //! * `Wireless<Empty, F>`: used mostly for wire counting and other static
 //!   structure analyses. Driver still executes natively, but with `Empty`
 //!   witness. Constructed via [`Emulator::counter`].
-//! * `Wireless<Always<()>, F>`: used for native witness execution/generation,
+//! * `Wireless<Always<()>, F>`: used for native witness generation,
 //!   constructed via [`Emulator::execute`] or directly execute the logic with
 //!   [`Emulator::emulate_wireless`].
 //!
@@ -53,7 +53,7 @@
 //!   execution/generation. This is the common case of executing circuit code
 //!   natively.
 //! * [`Emulator::counter`] creates a wireless [`Emulator`] for wire counting
-//!   and static analysis without witness data.
+//!   and static analysis without witness input.
 //!
 //! In [`Wired`] mode, wire assignments can be extracted from a gadget using
 //! [`Emulator::wires`], which returns a `Vec<F>` of field elements.

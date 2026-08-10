@@ -4,12 +4,12 @@ use core::{error, result};
 /// Alias for [`core::result::Result<T, Error>`].
 pub type Result<T> = result::Result<T, Error>;
 
-/// Represents the possible errors that might occur during circuit synthesis.
+/// Represents errors that can occur while running circuit code or related
+/// protocol code.
 ///
-/// This type captures all errors that can occur during circuit synthesis in the
-/// presence of a driver. There are numerous possible errors that can occur at
-/// various nesting levels of a protocol due to the complexity of recursive
-/// proofs, and so this is a catch-all error type for Ragu.
+/// This type captures witness-generation errors, input errors, encoding errors,
+/// capacity errors, setup errors, structural errors, and local check errors that
+/// can occur at various nesting levels of a protocol.
 ///
 /// The [`InvalidWitness`](Error::InvalidWitness),
 /// [`MalformedEncoding`](Error::MalformedEncoding), and
@@ -18,57 +18,59 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// Backends may fail to synthesize circuits that demand too many gates.
+    /// Capacity error: emitted constraints demand too many gates.
     #[error("exceeded the maximum number of gates ({limit})")]
     GateBoundExceeded {
         /// The maximum number of gates allowed by the backend.
         limit: usize,
     },
 
-    /// Backends may fail to synthesize circuits that demand too many
-    /// constraints to be enforced.
+    /// Capacity error: emitted constraints demand too many linear constraints.
     #[error("exceeded the maximum number of constraints ({limit})")]
     ConstraintBoundExceeded {
         /// The maximum number of constraints allowed by the backend.
         limit: usize,
     },
 
-    /// Backends may fail if too many individual circuits are being created
-    /// within a larger context, such as a computational graph for
-    /// proof-carrying data.
+    /// Capacity error: too many individual circuits are being created within a
+    /// larger context, such as a computational graph for proof-carrying data.
     #[error("exceeded the maximum number of circuits ({limit})")]
     CircuitBoundExceeded {
         /// The maximum number of circuits allowed within the context.
         limit: usize,
     },
 
-    /// Polynomials that exceed some degree bound will trigger this error.
+    /// Capacity error: a polynomial exceeded a configured degree bound.
     #[error("exceeded the maximum degree of a polynomial ({limit})")]
     DegreeBoundExceeded {
         /// The maximum polynomial degree allowed.
         limit: usize,
     },
 
-    /// Circuits may fail if they're asked to process, construct or verify
-    /// witness data without (known) satisfiability.
+    /// Legacy catch-all for witness-generation, local-check, input, or structural
+    /// errors.
+    ///
+    /// This variant is retained for compatibility. Documentation should describe
+    /// the concrete failure category and condition instead of referring to it as
+    /// an "invalid witness."
     #[error("invalid witness: {0}")]
     InvalidWitness(#[source] Box<dyn error::Error + Send + Sync + 'static>),
 
-    /// Synthesis can fail if data cannot be decoded from a stream like a proof
-    /// string
+    /// Encoding error: serialized or encoded data is malformed.
     #[error("malformed encoding: {0}")]
     MalformedEncoding(#[source] Box<dyn error::Error + Send + Sync + 'static>),
 
-    /// Violation of length constraint for a fixed-length vector
+    /// Input or encoding error: a fixed-length vector was given the wrong
+    /// length.
     #[error("vector does not have the expected length: (expected {expected}, actual {actual})")]
     VectorLengthMismatch {
-        /// Expected length enforced by static (compile-time) requirement
+        /// Expected length required by the type-level length.
         expected: usize,
-        /// Actual length observed at runtime
+        /// Actual length observed at runtime.
         actual: usize,
     },
 
-    /// Failure in the process of performing setup or other initialization steps.
+    /// Setup error: registration, initialization, or configuration failed.
     #[error("initialization failed: {0}")]
     Initialization(#[source] Box<dyn error::Error + Send + Sync + 'static>),
 }

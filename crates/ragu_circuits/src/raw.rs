@@ -10,7 +10,8 @@
 //! - [`RawCircuit`]: like [`Circuit`](crate::Circuit) but called from inside
 //!   [`orchestrate`], after the SYSTEM gate has already been allocated.
 //! - [`CircuitAdapter`]: wraps any `Circuit` into a `RawCircuit`.
-//! - [`orchestrate`]: the shared synthesis sequence that every driver executes.
+//! - [`orchestrate`]: the shared constraint-emission sequence that every driver
+//!   executes.
 //!
 //! # Orchestration
 //!
@@ -26,7 +27,7 @@
 //!    [`Element`](ragu_primitives::Element) wires, then enforce each against
 //!    the corresponding coefficient of the instance polynomial $k(Y)$.
 //! 4. **ONE constraint** — Enforce that [`Driver::ONE`] equals the constant
-//!    term of $k(Y)$. This is the final constraint emitted by synthesis and
+//!    term of $k(Y)$. This is the final emitted constraint and
 //!    occupies the $Y^0$ position.
 //!
 //! [`Driver::ONE`]: ragu_core::drivers::Driver::ONE
@@ -47,7 +48,7 @@ use crate::WithAux;
 ///
 /// Unlike [`Circuit`](crate::Circuit), which is the public API for circuit
 /// authors, `RawCircuit` is an internal seam between [`orchestrate`] and the
-/// circuit body. It exists to let test-only synthesis logic (e.g.
+/// circuit body. It exists to let test-only constraint-emission logic (e.g.
 /// [`StageMask`](crate::staging::mask::StageMask)) share the same SYSTEM-gate
 /// allocation and ONE-constraint enforcement steps as production circuits.
 pub(crate) trait RawCircuit<F: Field>: Sized + Send + Sync {
@@ -58,10 +59,10 @@ pub(crate) trait RawCircuit<F: Field>: Sized + Send + Sync {
     /// polynomial.
     type Output: Write<F>;
 
-    /// Auxiliary data produced during witness computation.
+    /// Auxiliary data produced during witness generation.
     type Aux<'source>: Send;
 
-    /// Synthesize the circuit body.
+    /// Emits the circuit body's constraints and returns its public output.
     fn witness<'dr, 'source: 'dr, D: Driver<'dr, F = F>>(
         &self,
         dr: &mut D,
@@ -117,8 +118,8 @@ impl<F: Field, C: crate::Circuit<F>> RawCircuit<F> for CircuitAdapterRef<'_, C> 
     }
 }
 
-/// Runs the shared synthesis sequence that every driver executes around the
-/// circuit body.
+/// Runs the shared constraint-emission sequence that every driver executes
+/// around the circuit body.
 ///
 /// This function allocates the SYSTEM gate (gate 0), runs the circuit's
 /// witness method, writes public outputs, enforces them against the $k(Y)$

@@ -2,7 +2,7 @@
 //!
 //! This is a simple step: it takes any left header and combines it with the
 //! trivial header `()` to produce the same left header. In order to ensure that
-//! this rerandomization step synthesizes the same circuit no matter what the
+//! this rerandomization step emits the same constraints no matter what the
 //! left header is, we use a _uniform_ encoding of the left header.
 
 use core::marker::PhantomData;

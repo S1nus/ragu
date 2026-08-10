@@ -1,6 +1,6 @@
-//! Multi-stage circuit witness computation with staged wire allocation.
+//! Multi-stage circuit witness generation with staged wire allocation.
 //!
-//! The staging system separates witness computation into explicit **stage
+//! The staging system separates witness generation into explicit **stage
 //! polynomials** ($a(X)$, $b(X)$, ...) that can be committed independently,
 //! and an implicit **final trace** ($r'(X)$) that consumes their outputs.
 //! Together these form the full trace polynomial:
@@ -23,8 +23,8 @@
 //!    wire positions without computing values yet, ensuring all provers agree
 //!    on wire layout.
 //!
-//! 2. **Witness computation** — Call [`finish`](StageBuilder::finish) to get
-//!    the driver, then populate each stage via [`StageGuard::enforced`] or
+//! 2. **Witness generation** — Call [`finish`](StageBuilder::finish) to get the
+//!    driver, then populate each stage via [`StageGuard::enforced`] or
 //!    [`StageGuard::unenforced`]. The remaining code computes $r'(X)$.
 //!
 //! After phase 1, the trace polynomial has a fixed structure:
@@ -38,13 +38,13 @@
 //! See the `compute_v` module in `ragu_pcd` crate for a real-world multi-stage
 //! circuit, or the [staging chapter] in the book.
 //!
-//! See the parent module's [gadget invariants] section for what
-//! [`Stage::witness`] does and doesn't guarantee about the wires inside the
-//! gadget it returns, and how [`StageGuard::enforced`]/[`unenforced`] differ
-//! in how they treat those wires.
+//! See the parent module's [stage output contracts] section for what
+//! [`Stage::witness`] does and does not guarantee about the wires inside the
+//! gadget it returns, and how [`StageGuard::enforced`]/[`unenforced`] differ in
+//! how they treat those wires.
 //!
 //! [staging chapter]: https://tachyon.z.cash/ragu/implementation/staging
-//! [gadget invariants]: super#gadget-invariants
+//! [stage output contracts]: super#stage-output-contracts
 //! [`unenforced`]: StageGuard::unenforced
 
 use alloc::vec::Vec;
@@ -69,7 +69,7 @@ use ragu_primitives::{
 use super::{Stage, StageExt};
 use crate::polynomials::Rank;
 
-/// Builder object for synthesizing a multi-stage circuit witness.
+/// Builder object for executing a multi-stage circuit witness.
 pub struct StageBuilder<
     'a,
     'dr,
@@ -96,7 +96,8 @@ impl<'a, 'dr, D: Driver<'dr>, R: Rank, Target: Stage<D::F, R>>
     }
 }
 
-/// Injects pre-allocated stage wires into a gadget, without enforcing constraints.
+/// Injects pre-allocated stage wires into a gadget, without enforcing
+/// constraints.
 struct StageWireInjector<'a, 'dr, D: Driver<'dr>> {
     stage_wires: core::slice::Iter<'a, D::Wire>,
     _marker: PhantomData<&'dr ()>,
@@ -118,10 +119,12 @@ impl<'dr, D: Driver<'dr>> WireMap<D::F> for StageWireInjector<'_, 'dr, D> {
 /// pre-allocated stage wires.
 ///
 /// The stage wires are allocated at the correct positions, but the actual
-/// witness computation is deferred until one of the consuming methods is called:
+/// witness generation is deferred until one of the consuming methods is called:
 ///
-/// - [`enforced`](Self::enforced) - run witness and enforce constraints
-/// - [`unenforced`](Self::unenforced) - run witness without constraints
+/// - [`enforced`](Self::enforced) - run the stage witness body and re-emit
+///   covered wire contracts
+/// - [`unenforced`](Self::unenforced) - run the stage witness body without
+///   re-emitting wire contracts
 ///
 /// To skip a stage without producing a gadget, use [`StageBuilder::skip_stage`]
 /// instead of [`add_stage`](StageBuilder::add_stage).
@@ -133,14 +136,19 @@ pub struct StageGuard<'dr, D: Driver<'dr>, R: Rank, S: Stage<D::F, R>> {
 }
 
 impl<'dr, D: Driver<'dr>, R: Rank, S: Stage<D::F, R> + 'dr> StageGuard<'dr, D, R, S> {
-    /// Inject pre-allocated stage wires into the gadget produced by
-    /// [`Stage::witness`], then provide the guarantee that the gadget is
-    /// [`Consistent`] by calling
-    /// [`enforce_consistent`](Consistent::enforce_consistent) on the real
-    /// driver.
+    /// Injects pre-allocated stage wires into the gadget produced by
+    /// [`Stage::witness`], then enforces the wire contracts covered by
+    /// [`Consistent`] in the consuming circuit.
     ///
-    /// See the parent module's [gadget invariants](super#gadget-invariants)
+    /// See the parent module's [stage output contracts](super#stage-output-contracts)
     /// section for what this guarantee does and does not cover.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the stage witness body cannot
+    /// produce its output, a structural error if the output gadget contains more
+    /// wires than were reserved, or a local-check error if `Consistent`
+    /// enforcement fails under a checking driver.
     pub fn enforced<'source: 'dr>(
         self,
         dr: &mut D,
@@ -154,7 +162,8 @@ impl<'dr, D: Driver<'dr>, R: Rank, S: Stage<D::F, R> + 'dr> StageGuard<'dr, D, R
         Ok(output)
     }
 
-    /// Internal helper that injects stage wires without enforcing constraints.
+    /// Internal helper that injects stage wires without re-emitting wire
+    /// contracts.
     fn unenforced_inner<'source: 'dr>(
         self,
         witness: DriverValue<D, S::Witness<'source>>,
@@ -170,13 +179,21 @@ impl<'dr, D: Driver<'dr>, R: Rank, S: Stage<D::F, R> + 'dr> StageGuard<'dr, D, R
         computed_gadget.map(&mut injector)
     }
 
-    /// Inject pre-allocated stage wires into the gadget produced by
-    /// [`Stage::witness`] without any further guarantee about the wires.
+    /// Injects pre-allocated stage wires into the gadget produced by
+    /// [`Stage::witness`] without re-emitting output wire contracts in this
+    /// circuit.
     ///
-    /// Takes the prover at their word, or relies on a different
-    /// [`enforced`](Self::enforced) call to check the gadget's invariants.
-    /// See the parent module's [gadget invariants](super#gadget-invariants)
-    /// section.
+    /// # Preconditions
+    ///
+    /// Callers must use this only when the output wire contracts are enforced
+    /// elsewhere or are not needed by later circuit code. See the parent
+    /// module's [stage output contracts](super#stage-output-contracts) section.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the stage witness body cannot
+    /// produce its output, or a structural error if the output gadget contains
+    /// more wires than were reserved.
     pub fn unenforced<'source: 'dr>(
         self,
         _dr: &mut D,
@@ -189,12 +206,17 @@ impl<'dr, D: Driver<'dr>, R: Rank, S: Stage<D::F, R> + 'dr> StageGuard<'dr, D, R
 impl<'a, 'dr, D: Driver<'dr>, R: Rank, Current: Stage<D::F, R>, Target: Stage<D::F, R>>
     StageBuilder<'a, 'dr, D, R, Current, Target>
 {
-    /// Add the next stage to the builder, allocating stage wire positions.
+    /// Adds the next stage to the builder, allocating stage wire positions.
     ///
     /// This method allocates the stage wires at the correct positions but does
-    /// not compute the witness. Call [`StageGuard::unenforced`] or
+    /// not run the stage witness body. Call [`StageGuard::unenforced`] or
     /// [`StageGuard::enforced`] on the returned guard to provide the witness
     /// and obtain the output gadget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if the stage output uses more wires than its
+    /// configured value count.
     pub fn configure_stage<Next: Stage<D::F, R, Parent = Current> + 'dr>(
         self,
         stage: Next,
@@ -203,7 +225,7 @@ impl<'a, 'dr, D: Driver<'dr>, R: Rank, Current: Stage<D::F, R>, Target: Stage<D:
         StageBuilder<'a, 'dr, D, R, Next, Target>,
     )> {
         // Invoke wireless emulator with dummy witness to get gadget structure.
-        // The emulator never actually reads the witness values.
+        // The emulator never actually reads witness input.
         let mut emulator = Emulator::counter();
         let mut num_wires = stage.witness(&mut emulator, Empty)?.num_wires()?;
 
@@ -259,7 +281,7 @@ impl<'a, 'dr, D: Driver<'dr>, R: Rank, Current: Stage<D::F, R>, Target: Stage<D:
     ///
     /// This allocates the stage wire positions but does not return a guard,
     /// so it's used when you need to reserve the wire positions for a stage
-    /// but don't need to compute its witness or produce its output gadget.
+    /// but don't need to run its witness body or produce its output gadget.
     pub fn skip_stage<Next: Stage<D::F, R, Parent = Current> + Default + 'dr>(
         self,
     ) -> Result<StageBuilder<'a, 'dr, D, R, Next, Target>> {

@@ -1,14 +1,14 @@
 //! Error-swallowing trust boundary.
 //!
 //! Circuits are trusted to propagate driver errors with `?`. A malicious
-//! circuit can instead drop an error and let synthesis continue. These tests
-//! pin what actually happens on each synthesis path when it does. For direct
-//! gate failures, the trace evaluator records nothing while the metrics counter
-//! still counts the gate, and assembly catches the resulting desynchronization.
-//! For partially executed routine failures, the trace evaluator stops the
-//! routine after the failing witness closure while the metrics counter, which
-//! does not run that closure, synthesizes the complete routine. Assembly then
-//! catches the short routine segment.
+//! circuit can instead drop an error and keep running. These tests pin what
+//! actually happens on each driver path when it does. For direct gate failures,
+//! the trace evaluator records nothing while the metrics counter still counts
+//! the gate, and assembly catches the resulting desynchronization. For partially
+//! executed routine failures, the trace evaluator stops the routine after the
+//! failing witness closure while the metrics counter, which does not run that
+//! closure, walks the complete routine. Assembly then catches the short routine
+//! segment.
 
 use alloc::format;
 
@@ -29,8 +29,8 @@ use crate::{
 
 /// Well-behaved reference circuit: allocates `a` and `b`, outputs `(a + b, a - b)`.
 ///
-/// Serves as the control for the error-swallowing circuits below: same shape,
-/// same allocations, no dropped errors.
+/// Serves as the control for the error-swallowing circuits below: same
+/// constraints, same allocations, no dropped errors.
 struct WellBehavedCircuit;
 
 impl Circuit<Fp> for WellBehavedCircuit {
@@ -64,11 +64,11 @@ impl Circuit<Fp> for WellBehavedCircuit {
     }
 }
 
-/// Malicious circuit: identical shape to [`WellBehavedCircuit`], but drops the
-/// error from a bogus gate placed between the two real allocations.
+/// Malicious circuit: identical to [`WellBehavedCircuit`], but drops the error
+/// from a bogus gate placed between the two real allocations.
 ///
 /// Exercises the trust boundary where circuits are expected to propagate driver
-/// errors with `?`. The two synthesis paths disagree about whether that gate
+/// errors with `?`. The two driver paths disagree about whether that gate
 /// exists:
 ///
 /// * [`trace`](crate::trace)'s evaluator has `MaybeKind = Always`, so
@@ -120,7 +120,7 @@ impl Circuit<Fp> for ErrorSwallowingCircuit {
 ///
 /// The trace driver evaluates `D::try_just`, so it records the square and then
 /// returns the allocation error. Empty structure drivers do not evaluate that
-/// closure, so they synthesize the allocation and complete the routine.
+/// closure, so they record the allocation and complete the routine.
 #[derive(Clone)]
 struct PartiallyExecutedFailingRoutine;
 
@@ -150,8 +150,8 @@ impl Routine<Fp> for PartiallyExecutedFailingRoutine {
     }
 }
 
-/// Propagates a partially executed routine's error back to the synthesis
-/// caller.
+/// Propagates a partially executed routine's error back to the calling
+/// circuit.
 struct RoutineErrorPropagatingCircuit;
 
 impl Circuit<Fp> for RoutineErrorPropagatingCircuit {
@@ -208,7 +208,7 @@ impl Circuit<Fp> for RoutineErrorSwallowingCircuit {
         // Swallow the error rather than propagating it with `?`.
         let _ = dr.routine(PartiallyExecutedFailingRoutine, routine_input);
 
-        // Trace synthesis restores the parent scope before returning the error.
+        // Trace evaluation restores the parent scope before returning the error.
         let output = Element::alloc(dr, allocator, witness.as_ref().map(|value| value.1))?;
         Ok(WithAux::new(output, D::unit()))
     }
@@ -266,7 +266,7 @@ fn test_propagated_gate_error_caught() {
 }
 
 /// Positive control for the routine boundary: propagating the error returned
-/// by `dr.routine` aborts trace synthesis with that same error.
+/// by `dr.routine` aborts trace evaluation with that same error.
 #[test]
 fn test_propagated_routine_error_caught() {
     let witness = Fp::from(3u64);
@@ -279,12 +279,12 @@ fn test_propagated_routine_error_caught() {
     }
 
     let obj = into_wiring_object::<_, _, TestRank>(RoutineErrorPropagatingCircuit)
-        .expect("structure synthesis must not evaluate the failing witness closure");
+        .expect("structure drivers must not evaluate the failing witness closure");
     assert_eq!(obj.segment_records().len(), 2);
 }
 
 /// A swallowed routine error leaves the routine trace one gate shorter than the
-/// structure synthesized by metrics, so assembly rejects the routine segment.
+/// structure recorded by metrics, so assembly rejects the routine segment.
 #[test]
 #[should_panic(expected = "segment 1 size must match floor plan")]
 fn test_swallowed_routine_error_rejected_during_assembly() {

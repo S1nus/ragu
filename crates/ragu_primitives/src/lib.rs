@@ -47,7 +47,7 @@ pub use sendable::Sendable;
 pub use simulator::Simulator;
 pub use suffix::WithSuffix;
 
-/// Extension trait that adds invariant-aware equality
+/// Extension trait that adds wire-contract-aware equality
 /// ([`enforce_equal`](GadgetExt::enforce_equal)), serialization
 /// ([`write`](GadgetExt::write)), and witness-stripping
 /// ([`demote`](GadgetExt::demote)) to all supporting gadgets.
@@ -58,7 +58,7 @@ pub trait GadgetExt<'dr, D: Driver<'dr>>: Gadget<'dr, D> {
     /// This is the ordinary equality operation for circuit code working with
     /// constructed gadgets. It may be more efficient than the conservative
     /// [`Gadget::enforce_conservative_equal`] check by using the gadget's
-    /// representation and invariants.
+    /// representation and wire contracts.
     fn enforce_equal<D2: Driver<'dr, F = D::F, Wire = D::Wire>>(
         &self,
         dr: &mut D2,
@@ -81,7 +81,7 @@ pub trait GadgetExt<'dr, D: Driver<'dr>>: Gadget<'dr, D> {
         <Self::Kind as Write<D::F>>::write_gadget(self, dr, buf)
     }
 
-    /// Demote this gadget by stripping its witness data.
+    /// Demotes this gadget by stripping its witness data.
     fn demote(&self) -> Result<Demoted<'dr, D, Self>> {
         Demoted::new(self)
     }

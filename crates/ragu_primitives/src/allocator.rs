@@ -39,7 +39,7 @@ use ragu_core::{Result, drivers::Driver};
 /// stashing the [`Extra`](ragu_core::drivers::DriverTypes::Extra) token
 /// that the `()` allocator discards, and also accepts donated tokens.
 pub trait Allocator<'dr, D: Driver<'dr>> {
-    /// Allocates a new wire whose value is supplied by `value`.
+    /// Allocates a new wire whose assignment is computed by `value`.
     ///
     /// The closure follows the same purity contract as [`Driver::mul`]:
     /// it may be called zero or more times, it must be side-effect-free,

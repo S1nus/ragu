@@ -37,8 +37,9 @@ use crate::Element;
 /// Gadgets that consist mainly of other gadgets are candidates for [automatic
 /// derivation](derive@Write) of this trait.
 pub trait Write<F: Field>: GadgetKind<F> {
-    /// Write this gadget into wires that are written the provided buffer,
-    /// using the driver to synthesize the elements if needed.
+    /// Writes this gadget into elements that are sent to the provided buffer,
+    /// using the driver to emit any constraints needed to construct those
+    /// elements.
     fn write_gadget<'dr, D: Driver<'dr, F = F>, B: Buffer<'dr, D>>(
         this: &Bound<'dr, D, Self>,
         dr: &mut D,

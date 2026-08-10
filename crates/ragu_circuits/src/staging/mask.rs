@@ -100,6 +100,11 @@ impl<R: Rank> StageMask<R> {
     /// here because `a[0]` carries the alpha blinding factor and
     /// `d[0]` may or may not be set to 1; `b[0]` and `c[0]` are
     /// zero in all cases.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if `skip_gates + num_gates` exceeds the rank's
+    /// gate bound.
     pub fn new(skip_gates: usize, num_gates: usize) -> Result<Self> {
         assert!(skip_gates > 0, "skip_gates must include the SYSTEM gate");
         if skip_gates + num_gates > R::n() {
@@ -117,6 +122,10 @@ impl<R: Rank> StageMask<R> {
     /// be at least 1 (it includes the SYSTEM gate). The number
     /// of gates will be `R::n() - skip_gates`, which is the maximum
     /// before bounds are reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if `skip_gates` exceeds the rank's gate bound.
     pub fn new_final(skip_gates: usize) -> Result<Self> {
         assert!(skip_gates > 0, "skip_gates must include the SYSTEM gate");
         if skip_gates > R::n() {
@@ -672,7 +681,7 @@ mod tests {
     }
 
     // Hand-written because the derive only re-emits each field's own
-    // invariants, dropping the cross-field `a == b` constraint that
+    // wire contracts, dropping the cross-field `a == b` constraint that
     // `ConstrainedStage::witness` imposes.
     impl<'dr, D: Driver<'dr>> Consistent<'dr, D> for TwoElements<'dr, D> {
         fn enforce_consistent(&self, dr: &mut D) -> Result<()> {

@@ -1,6 +1,6 @@
 //! Assembly of the $r(X)$ trace polynomial.
 //!
-//! The [`eval`] function in this module processes witness data for a
+//! The [`eval`] function in this module processes witness input for a
 //! particular [`Circuit`] and produces raw gate values as a [`Trace`].
 //! The [`Trace`] is later assembled into a [`sparse::Polynomial`]
 //! by the registry.
@@ -278,7 +278,7 @@ impl<'scope, 'env, F: Field> Driver<'env> for Evaluator<'scope, 'env, F> {
                 //
                 // Created when `predict()` returns [`Known`](Prediction::Known),
                 // allowing the main traversal to continue with the predicted
-                // output while deferring the actual witness computation.
+                // output while deferring the actual witness generation.
                 let output = CloneWires::remap(&predicted_output)?;
                 let input = StripWires::remap(&input)?.sendable();
 
@@ -359,7 +359,7 @@ fn finish<F: Field>(mut segments: Vec<AnnotatedSegment<F>>) -> Trace<F> {
     }
 }
 
-/// Computes the trace for a circuit from a witness, producing a [`Trace`]
+/// Computes the trace for a circuit from witness input, producing a [`Trace`]
 /// and auxiliary data.
 ///
 /// The returned [`Trace`] can be assembled into a polynomial via
@@ -448,7 +448,7 @@ mod tests {
             dr: &mut D,
             _buf: &mut B,
         ) -> Result<()> {
-            // These calls synthesize constraints during serialization.
+            // These calls emit constraints during serialization.
             // If io.write() were removed from trace::eval, they would be lost.
             dr.mul(|| Ok((Coeff::One, Coeff::One, Coeff::One)))?;
             dr.enforce_zero(|lc| lc)?;
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_gadget_synthesizes_into_trace() {
+    fn test_write_gadget_emits_into_trace() {
         let circuit = MulOnWriteCircuit;
         let witness = Fp::from(42u64);
         let trace = eval::<Fp, _>(&circuit, witness).unwrap().into_output();
