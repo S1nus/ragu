@@ -7,14 +7,15 @@ name: Continuous fuzzing
 # crash as a failed job + uploaded artifact.
 
 on:
-  # Twice-weekly: Sundays and Wednesdays at 00:00 UTC. Spreading the runs
-  # gives libFuzzer fresh mutation randomness on each fire (while still
-  # accumulating the corpus across runs via cache), which empirically
-  # outperforms single long runs for shallow-bug discovery. Catches
-  # regressions ~3 days faster than once-weekly.
+  # Three times weekly: Sundays, Wednesdays, and Fridays at 00:00 UTC.
+  # Spreading the runs gives libFuzzer fresh mutation randomness on each
+  # fire (while still accumulating the corpus across runs via cache),
+  # which empirically outperforms single long runs for shallow-bug
+  # discovery and bounds the gap between campaigns to three days.
   schedule:
     - cron: '0 0 * * 0'
     - cron: '0 0 * * 3'
+    - cron: '0 0 * * 5'
   # Ad-hoc trigger from the Actions tab.
   workflow_dispatch:
     inputs:
@@ -64,6 +65,9 @@ jobs:
           - fuzz_revdot
           - fuzz_fold_revdot
           - fuzz_sxy_agreement
+          - fuzz_circuit_witness
+          - fuzz_circuit_revdot_identity
+          - fuzz_staging
           - fuzz_verify_reject
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -82,12 +86,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fuzz-cron-target-
 
-      # Per-target corpus: each run extends the corpus for its target, then
-      # uploads the new state via the actions/cache "always-save" semantics
-      # (key includes the run id, so every run produces a fresh cache entry;
-      # restore-keys then pulls the most recent prior entry on the next run).
+      # Per-target corpus: the run-id key never matches an existing entry,
+      # so restore-keys' prefix match pulls the most recent prior corpus;
+      # the run extends it, and the explicit save step below uploads it as
+      # a fresh entry. Split restore/save (rather than the combined cache
+      # action) so the save still happens when the job fails — a
+      # crash-finding run is exactly the one whose corpus progress we
+      # most want to keep.
       - name: Restore fuzz corpus
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: qa/fuzz/corpus/${{ matrix.target }}
           key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -95,7 +102,26 @@ jobs:
             ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        # Keep this pin in sync with fuzz-coverage.yml. An unlocked install
+        # currently resolves cargo-platform 0.3.3, which requires Rust 1.91,
+        # while this step runs under the repository's Rust 1.90 toolchain.
+        run: cargo install --locked cargo-fuzz@0.13.1
+
+      # Replay committed crash reproducers (one execution per file, no
+      # fuzzing) before spending the long fuzz budget. A regression here
+      # fails the job immediately.
+      - name: Replay regression inputs
+        working-directory: qa/fuzz
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.nightly.outputs.toolchain }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if compgen -G "regressions/${FUZZ_TARGET}/*" > /dev/null; then
+            cargo fuzz run --fuzz-dir . "$FUZZ_TARGET" regressions/"${FUZZ_TARGET}"/*
+          else
+            echo "No regression inputs for ${FUZZ_TARGET}; skipping."
+          fi
 
       - name: Run fuzz target
         working-directory: qa/fuzz
@@ -120,12 +146,30 @@ jobs:
             cargo run --release --bin extract_dict > dict.txt
             DICT_FLAG="-dict=dict.txt"
           fi
+          # Corpus layout: corpus/<target> (cache-restored, receives new
+          # units) plus seeds/<target> (committed read-only seed inputs)
+          # when present, so cold-cache runs don't start from an empty
+          # corpus.
+          mkdir -p "corpus/${FUZZ_TARGET}"
+          CORPUS_DIRS="corpus/${FUZZ_TARGET}"
+          if [ -d "seeds/${FUZZ_TARGET}" ]; then
+            CORPUS_DIRS="${CORPUS_DIRS} seeds/${FUZZ_TARGET}"
+          fi
           # Tee output so we can extract stats after the run regardless
           # of whether the fuzz target crashed.
-          cargo fuzz run --fuzz-dir . "$FUZZ_TARGET" -- \
+          cargo fuzz run --fuzz-dir . "$FUZZ_TARGET" $CORPUS_DIRS -- \
             $DICT_FLAG \
             -max_len=1024 \
             -max_total_time="$DURATION" 2>&1 | tee fuzz-run.log
+
+      - name: Save fuzz corpus
+        # always() so the corpus extension survives crash-finding (failed)
+        # runs; the combined cache action only saves on job success.
+        if: always()
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: qa/fuzz/corpus/${{ matrix.target }}
+          key: ${{ runner.os }}-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
 
       - name: Extract run stats
         # Run even if the fuzz step crashed — we want stats artifacts

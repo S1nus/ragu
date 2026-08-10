@@ -27,6 +27,15 @@ ASAN=1 ./fuzz.sh
 
 # Run a single target directly.
 cargo +nightly fuzz run fuzz_element_ops -- -max_total_time=60
+
+# Replay all committed crash regressions once each.
+./fuzz.sh regress
+
+# Minimize each accumulated corpus in place.
+./fuzz.sh cmin
+
+# Generate per-target reports and a union coverage report locally.
+./fuzz.sh coverage
 ```
 
 ## Targets
@@ -139,7 +148,7 @@ were insensitive to it — that's the real bug class.
 
 ## CI
 
-Two workflows in `.github/workflows/`:
+Three workflows in `.github/workflows/`:
 
 - **`rust.yml`** runs `cargo +nightly check --bins` from this directory
   on every PR. Catches bitrot in the fuzz crate without actually running
@@ -147,10 +156,16 @@ Two workflows in `.github/workflows/`:
   and `bin/**/*.rs`.
 
 - **`fuzz-cron.yml`** runs every target via matrix-parallel for 5 hours
-  each, weekly on Sundays at 00:00 UTC. Corpus persists across runs via
-  `actions/cache`. Crashes upload as workflow artifacts with 30-day
-  retention. Manual trigger via the Actions tab `workflow_dispatch`
-  with override knobs for `duration` and `use_dict`.
+  each on Sundays, Wednesdays, and Fridays at 00:00 UTC. Each target
+  restores its latest corpus, replays committed crash regressions, extends
+  the corpus, and saves it even when fuzzing finds a crash. Crash artifacts
+  have 30-day retention. Manual runs can override `duration` and `use_dict`.
+
+- **`fuzz-coverage.yml`** runs every Monday at 06:00 UTC, after the Sunday
+  fuzz run. Each matrix job restores its target's latest accumulated corpus,
+  includes any committed seeds, generates an `llvm-cov` per-file report,
+  writes the headline totals to the job summary, and uploads the full report
+  with 90-day retention.
 
 ## Why several targets duplicate the same `Op` enum
 

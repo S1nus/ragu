@@ -9,6 +9,15 @@
 #   ASAN=1 ./fuzz.sh                          # Re-enable AddressSanitizer
 #   ./fuzz.sh summarize <target> <file>       # Decode a corpus/crash input
 #   ./fuzz.sh triage <file>                   # Triage a fuzz_witness_cheat crash
+#   ./fuzz.sh cmin [target]                   # Minimize corpora in place (all targets if omitted)
+#   ./fuzz.sh regress [target]                # Replay committed crash reproducers once each
+#   ./fuzz.sh coverage [target]               # Corpus coverage report (union report if all targets)
+#
+# Crash-regression inputs: when a fuzz run finds a real bug, commit the
+# minimized reproducer to regressions/<target>/ (tracked in git, unlike
+# corpus/ and seeds/). `./fuzz.sh regress` replays every committed
+# reproducer once and fails on any crash; the cron does the same before
+# each fuzz run.
 #
 # The DICT=1 path passes -dict=dict.txt to libFuzzer. Empirical comparison
 # (60s on fuzz_element_ops): roughly flat coverage with a small features
@@ -20,7 +29,7 @@
 # — measured ~70% on fuzz_witness_cheat (50k → 84k exec/s), ~30% on
 # fuzz_poseidon_sponge, ~10% on fuzz_element_ops. ASAN catches memory
 # bugs (UAF, OOB on unwise unsafe, leaks across `Simulator::simulate`
-# closures); to opt back in, set ASAN=1. The weekly cron in
+# closures); to opt back in, set ASAN=1. The scheduled cron in
 # `.github/workflows/fuzz-cron.yml` invokes `cargo +nightly fuzz run`
 # directly and keeps ASAN regardless of this script's default. Crash
 # artifacts found here should be reproduced under ASAN=1 before triaging
@@ -42,6 +51,29 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
+
+TARGETS=(
+  fuzz_poseidon_sponge
+  fuzz_endoscalar
+  fuzz_element_ops
+  fuzz_circuit_witness
+  fuzz_circuit_revdot_identity
+  fuzz_staging
+  fuzz_revdot
+  fuzz_fold_revdot
+  fuzz_sxy_agreement
+  fuzz_poseidon_differential
+  fuzz_verify_reject
+  fuzz_witness_cheat
+  fuzz_driver_metamorphic
+  fuzz_witness_coverage
+  fuzz_algebraic_identities
+  fuzz_element_assertions
+  fuzz_multipack
+  fuzz_point_identities
+  fuzz_consistent
+  fuzz_io_roundtrip
+)
 
 # `summarize` subcommand: decode a single corpus/crash input via DEBUG_INPUT.
 if [[ "${1:-}" == "summarize" ]]; then
@@ -75,6 +107,127 @@ if [[ "${1:-}" == "triage" ]]; then
   exit
 fi
 
+# `cmin` subcommand: coverage-preserving corpus minimization, in place.
+# Minimizes one target's corpus, or every target's when none is given.
+# Uses `-s none` to reuse the default build cache; set ASAN=1 to match a
+# sanitizer-enabled build instead.
+if [[ "${1:-}" == "cmin" ]]; then
+  CMIN_SAN_FLAG="-s none"
+  if [[ -n "${ASAN:-}" ]]; then
+    CMIN_SAN_FLAG=""
+  fi
+  if [[ -n "${2:-}" ]]; then
+    CMIN_TARGETS=("$2")
+  else
+    CMIN_TARGETS=("${TARGETS[@]}")
+  fi
+  for target in "${CMIN_TARGETS[@]}"; do
+    if [[ ! -d "corpus/$target" ]]; then
+      echo "=== $target: no corpus, skipping ==="
+      continue
+    fi
+    BEFORE=$(find "corpus/$target" -type f | wc -l | tr -d ' ')
+    echo "=== cmin $target ($BEFORE inputs) ==="
+    cargo +nightly fuzz cmin --fuzz-dir . $CMIN_SAN_FLAG "$target"
+    AFTER=$(find "corpus/$target" -type f | wc -l | tr -d ' ')
+    echo "=== $target: $BEFORE -> $AFTER inputs ==="
+  done
+  exit
+fi
+
+# `regress` subcommand: replay committed crash reproducers (one
+# execution per file, no fuzzing) for one target or all targets.
+# Any crash fails the run.
+if [[ "${1:-}" == "regress" ]]; then
+  REG_SAN_FLAG="-s none"
+  if [[ -n "${ASAN:-}" ]]; then
+    REG_SAN_FLAG=""
+  fi
+  if [[ -n "${2:-}" ]]; then
+    REG_TARGETS=("$2")
+  else
+    REG_TARGETS=("${TARGETS[@]}")
+  fi
+  for target in "${REG_TARGETS[@]}"; do
+    files=("regressions/$target"/*)
+    if [[ ! -e "${files[0]:-}" ]]; then
+      continue
+    fi
+    echo "=== regress $target (${#files[@]} inputs) ==="
+    cargo +nightly fuzz run --fuzz-dir . $REG_SAN_FLAG "$target" "${files[@]}"
+  done
+  echo "=== regressions OK ==="
+  exit
+fi
+
+# `coverage` subcommand: replay each target's corpus under a
+# coverage-instrumented build (cargo fuzz coverage), then emit an
+# llvm-cov per-file report to coverage/<target>/report.txt. When at
+# least two targets are covered, also merges the profiles into a single
+# union report at coverage/union-report.txt — the "which code does
+# fuzzing reach at all" view. Requires llvm-tools-preview:
+#   rustup component add llvm-tools-preview --toolchain nightly
+if [[ "${1:-}" == "coverage" ]]; then
+  HOST=$(rustc +nightly -vV | sed -n 's/^host: //p')
+  TOOLS="$(rustc +nightly --print sysroot)/lib/rustlib/${HOST}/bin"
+  if [[ ! -x "$TOOLS/llvm-cov" ]]; then
+    echo "llvm-cov not found under $TOOLS" >&2
+    echo "Install it with: rustup component add llvm-tools-preview --toolchain nightly" >&2
+    exit 1
+  fi
+  has_input_files() {
+    local dir="$1"
+    [[ -d "$dir" ]] && [[ -n "$(find "$dir" -type f -print -quit)" ]]
+  }
+  # Keep the report focused on workspace code: drop registry deps, the
+  # rust std sources, and the fuzz harness itself.
+  IGNORE='(/\.cargo/|/rustc/|/\.rustup/|qa/fuzz/)'
+  if [[ -n "${2:-}" ]]; then
+    COV_TARGETS=("$2")
+  else
+    COV_TARGETS=("${TARGETS[@]}")
+  fi
+  FIRST_BIN=""
+  PROFS=()
+  OBJS=()
+  for target in "${COV_TARGETS[@]}"; do
+    dirs=()
+    if has_input_files "corpus/$target"; then
+      dirs+=("corpus/$target")
+    fi
+    if has_input_files "seeds/$target"; then
+      dirs+=("seeds/$target")
+    fi
+    if [[ ${#dirs[@]} -eq 0 ]]; then
+      echo "=== $target: no corpus or seed inputs, skipping ==="
+      continue
+    fi
+    echo "=== coverage $target ==="
+    cargo +nightly fuzz coverage --fuzz-dir . -s none "$target" "${dirs[@]}"
+    BIN="target/${HOST}/coverage/${HOST}/release/$target"
+    PROF="coverage/$target/coverage.profdata"
+    "$TOOLS/llvm-cov" report --instr-profile="$PROF" "$BIN" \
+      --ignore-filename-regex="$IGNORE" > "coverage/$target/report.txt"
+    tail -1 "coverage/$target/report.txt"
+    PROFS+=("$PROF")
+    if [[ -z "$FIRST_BIN" ]]; then
+      FIRST_BIN="$BIN"
+    else
+      OBJS+=(-object "$BIN")
+    fi
+  done
+  if [[ ${#PROFS[@]} -ge 2 ]]; then
+    "$TOOLS/llvm-profdata" merge -sparse "${PROFS[@]}" -o coverage/union.profdata
+    "$TOOLS/llvm-cov" report --instr-profile=coverage/union.profdata \
+      "$FIRST_BIN" "${OBJS[@]}" \
+      --ignore-filename-regex="$IGNORE" > coverage/union-report.txt
+    echo "=== union (${#PROFS[@]} targets) ==="
+    tail -1 coverage/union-report.txt
+    echo "Union report: coverage/union-report.txt"
+  fi
+  exit
+fi
+
 DURATION="${1:-30}"
 PARALLEL="${2:-}"
 DICT="${DICT:-}"
@@ -92,33 +245,18 @@ if [[ -n "$ASAN" ]]; then
   SAN_FLAG=""
 fi
 
-TARGETS=(
-  fuzz_poseidon_sponge
-  fuzz_endoscalar
-  fuzz_element_ops
-  fuzz_circuit_witness
-  fuzz_circuit_revdot_identity
-  fuzz_staging
-  fuzz_revdot
-  fuzz_fold_revdot
-  fuzz_sxy_agreement
-  fuzz_poseidon_differential
-  fuzz_verify_reject
-  fuzz_witness_cheat
-  fuzz_driver_metamorphic
-  fuzz_witness_coverage
-  fuzz_algebraic_identities
-  fuzz_element_assertions
-  fuzz_multipack
-  fuzz_point_identities
-  fuzz_consistent
-  fuzz_io_roundtrip
-)
-
 run_target() {
   local target="$1"
   echo "=== $target (${DURATION}s) ==="
-  cargo +nightly fuzz run --fuzz-dir . $SAN_FLAG "$target" -- \
+  # First dir receives new units; seeds/<target> (when present) is a
+  # committed, read-only seed set merged in at startup so cold starts
+  # never begin from an empty corpus.
+  local dirs=("corpus/$target")
+  if [[ -d "seeds/$target" ]]; then
+    dirs+=("seeds/$target")
+  fi
+  mkdir -p "corpus/$target"
+  cargo +nightly fuzz run --fuzz-dir . $SAN_FLAG "$target" "${dirs[@]}" -- \
     $DICT_FLAG \
     -max_len=1024 \
     -max_total_time="$DURATION" \
