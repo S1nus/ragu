@@ -62,7 +62,8 @@ use ragu_core::{
 use ragu_primitives::{Element, Endoscalar, GadgetExt, allocator::Standard};
 
 use super::super::{
-    InternalCircuitIndex, InternalCircuitValues, RxComponent, RxIndex,
+    InternalCircuitIndex, InternalCircuitValues, RxComponent, RxIndex, STATIC_F_QUERIES,
+    StaticFQuery,
     claims::{self, Processor},
     stages::{
         eval as native_eval, preamble as native_preamble,
@@ -556,9 +557,9 @@ fn compute_axbx<'dr, D: Driver<'dr>, P: Parameters>(
 /// 6. **Internal circuit registry evaluations** - $m(\omega^j, x, y)$ for each
 ///    internal index
 ///
-/// The queries must be ordered exactly as in the prover's computation of $f(X)$
-/// in [`compute_f`], since the ordering affects the weight (with respect to
-/// [$\alpha$]) of each quotient polynomial.
+/// The static query prefix is defined by [`STATIC_F_QUERIES`] and consumed by
+/// both this circuit and the prover's [`compute_f`] path. The ordering affects
+/// the weight (with respect to [$\alpha$]) of each quotient polynomial.
 ///
 /// [`compute_f`]: crate::Application::compute_f
 /// [$\alpha$]: unified::Output::alpha
@@ -571,37 +572,80 @@ fn poly_queries<'a, 'dr, D: Driver<'dr>, C: Cycle<CircuitField = D::F>, const HE
     computed_ax: &'a Element<'dr, D>,
     computed_bx: &'a Element<'dr, D>,
 ) -> impl Iterator<Item = (&'a Element<'dr, D>, &'a Element<'dr, D>, &'a Element<'dr, D>)> {
-    [
-        // Check p(u) = v for each child proof.
-        (&eval.left.p_poly,        &preamble.left.unified.v,                     &d.left.u),
-        (&eval.right.p_poly,       &preamble.right.unified.v,                    &d.right.u),
-        // m(W, x_i, y_i) -> m(w, x_i, Y)
-        (&eval.left.registry_xy_poly,  &query.left.child_registry_xy_at_current_w,       &d.challenges.w),
-        (&eval.right.registry_xy_poly, &query.right.child_registry_xy_at_current_w,      &d.challenges.w),
-        (&eval.registry_wx0,           &query.left.child_registry_xy_at_current_w,       &d.left.y),
-        (&eval.registry_wx1,           &query.right.child_registry_xy_at_current_w,      &d.right.y),
-        // m(w, x_i, Y) -> m(w, X, y)
-        (&eval.registry_wx0,           &query.left.current_registry_wy_at_child_x,       &d.challenges.y),
-        (&eval.registry_wx1,           &query.right.current_registry_wy_at_child_x,      &d.challenges.y),
-        (&eval.registry_wy,            &query.left.current_registry_wy_at_child_x,       &d.left.x),
-        (&eval.registry_wy,            &query.right.current_registry_wy_at_child_x,      &d.right.x),
-        // m(w, X, y) -> s(W, x, y)
-        (&eval.registry_wy,            &query.registry_wxy,                              &d.challenges.x),
-        (&eval.registry_xy,            &query.registry_wxy,                              &d.challenges.w),
-        // m(circuit_id_i, x, y) evaluations for the ith child proof
-        (&eval.registry_xy,            &query.left.current_registry_xy_at_child_circuit_id,  &d.left.circuit_id),
-        (&eval.registry_xy,            &query.right.current_registry_xy_at_child_circuit_id, &d.right.circuit_id),
-        // a_i(xz), b_i(x) polynomial queries for each child proof
-        (&eval.left.a_poly,        &query.left.a_poly_at_xz,                         &d.challenges.xz),
-        (&eval.left.b_poly,        &query.left.b_poly_at_x,                          &d.challenges.x),
-        (&eval.right.a_poly,       &query.right.a_poly_at_xz,                        &d.challenges.xz),
-        (&eval.right.b_poly,       &query.right.b_poly_at_x,                         &d.challenges.x),
-        // a(xz), b(x) polynomial queries for the new accumulator; crucially, these evaluations
-        // are computed by the verifier based on the other evaluations, NOT witnessed by the
-        // prover.
-        (&eval.a_poly,             computed_ax,                                      &d.challenges.xz),
-        (&eval.b_poly,             computed_bx,                                      &d.challenges.x),
-    ].into_iter()
+    STATIC_F_QUERIES.into_iter().map(move |query_id| match query_id {
+        StaticFQuery::LeftP => (&eval.left.p_poly, &preamble.left.unified.v, &d.left.u),
+        StaticFQuery::RightP => (&eval.right.p_poly, &preamble.right.unified.v, &d.right.u),
+        StaticFQuery::LeftRegistryXyAtW => (
+            &eval.left.registry_xy_poly,
+            &query.left.child_registry_xy_at_current_w,
+            &d.challenges.w,
+        ),
+        StaticFQuery::RightRegistryXyAtW => (
+            &eval.right.registry_xy_poly,
+            &query.right.child_registry_xy_at_current_w,
+            &d.challenges.w,
+        ),
+        StaticFQuery::RegistryWx0AtLeftY => (
+            &eval.registry_wx0,
+            &query.left.child_registry_xy_at_current_w,
+            &d.left.y,
+        ),
+        StaticFQuery::RegistryWx1AtRightY => (
+            &eval.registry_wx1,
+            &query.right.child_registry_xy_at_current_w,
+            &d.right.y,
+        ),
+        StaticFQuery::RegistryWx0AtY => (
+            &eval.registry_wx0,
+            &query.left.current_registry_wy_at_child_x,
+            &d.challenges.y,
+        ),
+        StaticFQuery::RegistryWx1AtY => (
+            &eval.registry_wx1,
+            &query.right.current_registry_wy_at_child_x,
+            &d.challenges.y,
+        ),
+        StaticFQuery::RegistryWyAtLeftX => (
+            &eval.registry_wy,
+            &query.left.current_registry_wy_at_child_x,
+            &d.left.x,
+        ),
+        StaticFQuery::RegistryWyAtRightX => (
+            &eval.registry_wy,
+            &query.right.current_registry_wy_at_child_x,
+            &d.right.x,
+        ),
+        StaticFQuery::RegistryWyAtX => (&eval.registry_wy, &query.registry_wxy, &d.challenges.x),
+        StaticFQuery::RegistryXyAtW => (&eval.registry_xy, &query.registry_wxy, &d.challenges.w),
+        StaticFQuery::RegistryXyAtLeftCircuitId => (
+            &eval.registry_xy,
+            &query.left.current_registry_xy_at_child_circuit_id,
+            &d.left.circuit_id,
+        ),
+        StaticFQuery::RegistryXyAtRightCircuitId => (
+            &eval.registry_xy,
+            &query.right.current_registry_xy_at_child_circuit_id,
+            &d.right.circuit_id,
+        ),
+        StaticFQuery::LeftAbAAtXz => (
+            &eval.left.a_poly,
+            &query.left.a_poly_at_xz,
+            &d.challenges.xz,
+        ),
+        StaticFQuery::LeftAbBAtX => (&eval.left.b_poly, &query.left.b_poly_at_x, &d.challenges.x),
+        StaticFQuery::RightAbAAtXz => (
+            &eval.right.a_poly,
+            &query.right.a_poly_at_xz,
+            &d.challenges.xz,
+        ),
+        StaticFQuery::RightAbBAtX => (
+            &eval.right.b_poly,
+            &query.right.b_poly_at_x,
+            &d.challenges.x,
+        ),
+        StaticFQuery::CurrentAAtXz => (&eval.a_poly, computed_ax, &d.challenges.xz),
+        StaticFQuery::CurrentBAtX => (&eval.b_poly, computed_bx, &d.challenges.x),
+    })
     // Stage and circuit rx evaluations at xz for each child proof.
     // The same r_i(xz) values feed into both A(xz) (undilated) and
     // B(x) (Z-dilated) recomputations.

@@ -5,10 +5,11 @@
 //! bridge for committing to the polynomial.
 //!
 //! Each `factor_iter` call below produces the coefficients of $(p\_i(X) - v\_i)
-//! / (X - x\_i)$ for a single query. The terms must match `poly_queries` in the
-//! `compute_v` circuit exactly.
+//! / (X - x\_i)$ for a single query. The static query prefix is defined by
+//! [`STATIC_F_QUERIES`] and consumed by both this prover path and the
+//! `compute_v` circuit.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use ragu_arithmetic::{CryptoRngCore, Cycle, ff::Field};
 use ragu_circuits::{
@@ -23,7 +24,7 @@ use crate::{
     Application, Proof,
     internal::{
         native,
-        native::{RxComponent, RxIndex},
+        native::{RxComponent, RxIndex, STATIC_F_QUERIES, StaticFQuery},
         nested,
     },
     proof::ProofBuilder,
@@ -113,41 +114,59 @@ impl<C: Cycle, R: Rank, const HEADER_SIZE: usize> Application<'_, C, R, HEADER_S
             idx.circuit_index().omega_j()
         };
 
-        // This must exactly match the ordering of the `poly_queries` function
-        // in the `compute_v` circuit.
-        let mut iters: Vec<_> = vec![
-            // Child proof p(u)=v checks
-            factor_iter(left.native_p_poly().iter_coeffs(), left.u()),
-            factor_iter(right.native_p_poly().iter_coeffs(), right.u()),
-            // Registry transitions
-            factor_iter(left.native_registry_xy_poly().iter_coeffs(), w),
-            factor_iter(right.native_registry_xy_poly().iter_coeffs(), w),
-            factor_iter(s_prime.registry_wx0_poly.iter_coeffs(), left.y()),
-            factor_iter(s_prime.registry_wx1_poly.iter_coeffs(), right.y()),
-            factor_iter(s_prime.registry_wx0_poly.iter_coeffs(), y),
-            factor_iter(s_prime.registry_wx1_poly.iter_coeffs(), y),
-            factor_iter(registry_wy.poly.iter_coeffs(), left.x()),
-            factor_iter(registry_wy.poly.iter_coeffs(), right.x()),
-            factor_iter(registry_wy.poly.iter_coeffs(), x),
-            factor_iter(builder.native_registry_xy_poly().iter_coeffs(), w),
-            // App circuit registry evals
-            factor_iter(
-                builder.native_registry_xy_poly().iter_coeffs(),
-                left.circuit_id().omega_j(),
-            ),
-            factor_iter(
-                builder.native_registry_xy_poly().iter_coeffs(),
-                right.circuit_id().omega_j(),
-            ),
-            // A/B polynomial queries:
-            // a_poly at xz, b_poly at x for left child, right child, current
-            factor_iter(left[RxComponent::AbA].iter_coeffs(), xz),
-            factor_iter(left[RxComponent::AbB].iter_coeffs(), x),
-            factor_iter(right[RxComponent::AbA].iter_coeffs(), xz),
-            factor_iter(right[RxComponent::AbB].iter_coeffs(), x),
-            factor_iter(builder.native_a_poly().iter_coeffs(), xz),
-            factor_iter(builder.native_b_poly().iter_coeffs(), x),
-        ];
+        let mut iters: Vec<_> = STATIC_F_QUERIES
+            .into_iter()
+            .map(|query| match query {
+                StaticFQuery::LeftP => factor_iter(left.native_p_poly().iter_coeffs(), left.u()),
+                StaticFQuery::RightP => factor_iter(right.native_p_poly().iter_coeffs(), right.u()),
+                StaticFQuery::LeftRegistryXyAtW => {
+                    factor_iter(left.native_registry_xy_poly().iter_coeffs(), w)
+                }
+                StaticFQuery::RightRegistryXyAtW => {
+                    factor_iter(right.native_registry_xy_poly().iter_coeffs(), w)
+                }
+                StaticFQuery::RegistryWx0AtLeftY => {
+                    factor_iter(s_prime.registry_wx0_poly.iter_coeffs(), left.y())
+                }
+                StaticFQuery::RegistryWx1AtRightY => {
+                    factor_iter(s_prime.registry_wx1_poly.iter_coeffs(), right.y())
+                }
+                StaticFQuery::RegistryWx0AtY => {
+                    factor_iter(s_prime.registry_wx0_poly.iter_coeffs(), y)
+                }
+                StaticFQuery::RegistryWx1AtY => {
+                    factor_iter(s_prime.registry_wx1_poly.iter_coeffs(), y)
+                }
+                StaticFQuery::RegistryWyAtLeftX => {
+                    factor_iter(registry_wy.poly.iter_coeffs(), left.x())
+                }
+                StaticFQuery::RegistryWyAtRightX => {
+                    factor_iter(registry_wy.poly.iter_coeffs(), right.x())
+                }
+                StaticFQuery::RegistryWyAtX => factor_iter(registry_wy.poly.iter_coeffs(), x),
+                StaticFQuery::RegistryXyAtW => {
+                    factor_iter(builder.native_registry_xy_poly().iter_coeffs(), w)
+                }
+                StaticFQuery::RegistryXyAtLeftCircuitId => factor_iter(
+                    builder.native_registry_xy_poly().iter_coeffs(),
+                    left.circuit_id().omega_j(),
+                ),
+                StaticFQuery::RegistryXyAtRightCircuitId => factor_iter(
+                    builder.native_registry_xy_poly().iter_coeffs(),
+                    right.circuit_id().omega_j(),
+                ),
+                StaticFQuery::LeftAbAAtXz => factor_iter(left[RxComponent::AbA].iter_coeffs(), xz),
+                StaticFQuery::LeftAbBAtX => factor_iter(left[RxComponent::AbB].iter_coeffs(), x),
+                StaticFQuery::RightAbAAtXz => {
+                    factor_iter(right[RxComponent::AbA].iter_coeffs(), xz)
+                }
+                StaticFQuery::RightAbBAtX => factor_iter(right[RxComponent::AbB].iter_coeffs(), x),
+                StaticFQuery::CurrentAAtXz => {
+                    factor_iter(builder.native_a_poly().iter_coeffs(), xz)
+                }
+                StaticFQuery::CurrentBAtX => factor_iter(builder.native_b_poly().iter_coeffs(), x),
+            })
+            .collect();
         // Per-rx evaluations at xz only. The same r_i(xz) values feed
         // into both A(xz) (undilated) and B(x) (Z-dilated).
         for proof in [left, right] {
