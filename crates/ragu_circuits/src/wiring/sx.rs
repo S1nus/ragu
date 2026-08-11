@@ -13,8 +13,8 @@
 //!
 //! Rather than pre-computing $s(X, Y)$ as a bivariate polynomial and then
 //! evaluating it (which would require $O(n \cdot q)$ storage), this module uses
-//! a specialized [`Driver`] that interprets circuit synthesis operations to
-//! produce coefficients directly. Wires become evaluated monomials, and linear
+//! a specialized [`Driver`] that interprets circuit operations to produce
+//! coefficients directly. Wires become evaluated monomials, and linear
 //! combinations become field arithmetic.
 //!
 //! The driver redefines each operation as follows:
@@ -49,19 +49,19 @@
 //! indexed position in the result vector within the current routine's range.
 //! Because Horner's rule in [`sxy`] assigns decreasing $Y$-powers to
 //! later-emitted constraints (the first emitted gets the highest power), the
-//! synthesis-order storage is reversed relative to the canonical polynomial
+//! emission-order storage is reversed relative to the canonical polynomial
 //! convention where index $j$ is the coefficient of $Y^j$.
 //!
 //! To reconcile this, [`eval`] reverses each routine's coefficient range after
-//! synthesis completes. This per-routine reversal ensures that both this module
-//! and [`sxy`] agree on which constraint maps to which $Y$-power.
+//! constraint emission completes. This per-routine reversal ensures that both
+//! this module and [`sxy`] agree on which constraint maps to which $Y$-power.
 //!
 //! After reversal, the root segment's coefficients are ordered as:
 //! 1. $c\_{0}$: `ONE` wire constraint (the constant $1$)
 //! 2. $c\_{1}, \ldots, c\_{p}$: public output constraints
 //! 3. $c\_{p+1}, \ldots, c\_{p+m}$: circuit-specific constraints
 //!
-//! This follows from the root segment's synthesis order — circuit body first,
+//! This follows from the root segment's emission order — circuit body first,
 //! then public outputs, and `ONE` last — being flipped by the reversal.
 //!
 //! The registry key constraint is **not** included in these coefficients; it
@@ -111,14 +111,14 @@ struct SxScope<F> {
 /// A [`Driver`] that computes the partial evaluation $s(x, Y)$.
 ///
 /// Given a fixed evaluation point $x \in \mathbb{F}$, this driver interprets
-/// circuit synthesis operations to produce the coefficients of $s(x, Y)$
-/// directly as field elements. Each call to [`Driver::enforce_zero`] stores one
-/// coefficient in the result polynomial.
+/// circuit operations to produce the coefficients of $s(x, Y)$ directly as
+/// field elements. Each call to [`Driver::enforce_zero`] stores one coefficient
+/// in the result polynomial.
 ///
 /// [`Driver`]: ragu_core::drivers::Driver
 /// [`Driver::enforce_zero`]: ragu_core::drivers::Driver::enforce_zero
 struct Evaluator<'fp, F: Field, R: Rank> {
-    /// Accumulated polynomial coefficients, built in reverse synthesis order.
+    /// Accumulated polynomial coefficients, built in reverse emission order.
     ///
     /// Each [`enforce_zero`](Driver::enforce_zero) call appends one
     /// coefficient. The vector is reversed at the end of [`eval`] to produce
@@ -169,7 +169,7 @@ impl<F: Field, R: Rank> DriverScope<SxScope<F>> for Evaluator<'_, F, R> {
 
 /// Configures associated types for the [`Evaluator`] driver.
 ///
-/// - `MaybeKind = Empty`: No witness values are needed; we only evaluate the
+/// - `MaybeKind = Empty`: No witness input is needed; we only evaluate the
 ///   polynomial structure.
 /// - `LCadd` / `LCenforce`: Use [`DirectSum`] to accumulate linear combinations
 ///   as immediate field element sums.
@@ -319,7 +319,6 @@ impl<'dr, F: Field, R: Rank> Driver<'dr> for Evaluator<'_, F, R> {
 /// - `x`: The evaluation point for the $X$ variable.
 /// - `floor_plan`: Per-segment absolute offsets, computed by
 ///   [`floor_plan()`](crate::floor_planner::floor_plan).
-///
 pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
     circuit: &RC,
     x: F,
@@ -327,7 +326,7 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
 ) -> Result<sparse::Polynomial<F, R>> {
     // At x = 0 every monomial other than x^0 vanishes; the d[0] ONE wire
     // (at x^0) still contributes F::ONE. Set x_inv = 0 so the running
-    // monomials stay zero through synthesis.
+    // monomials stay zero through constraint emission.
     let x_inv = if x == F::ZERO {
         F::ZERO
     } else {
@@ -344,8 +343,8 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
 
     let mut evaluator = Evaluator::<F, R> {
         // Zero-initialized: the evaluator fills specific indices during
-        // synthesis. Unfilled indices must remain zero as they represent
-        // unused wire slots.
+        // constraint emission. Unfilled indices must remain zero as they
+        // represent unused wire slots.
         result: vec![F::ZERO; R::num_coeffs()],
         scope: SxScope {
             current_a_x: base_a_x,
@@ -371,7 +370,7 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
     assert_eq!(
         evaluator.current_routine + 1,
         evaluator.floor_plan.len(),
-        "floor plan routine count must match synthesis"
+        "floor plan routine count must match constraint emission"
     );
     assert_eq!(
         evaluator.scope.gates, evaluator.floor_plan[0].num_gates,

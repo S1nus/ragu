@@ -100,6 +100,11 @@ impl<R: Rank> StageMask<R> {
     /// here because `a[0]` carries the alpha blinding factor and
     /// `d[0]` may or may not be set to 1; `b[0]` and `c[0]` are
     /// zero in all cases.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if `skip_gates + num_gates` exceeds the rank's
+    /// gate bound.
     pub fn new(skip_gates: usize, num_gates: usize) -> Result<Self> {
         assert!(skip_gates > 0, "skip_gates must include the SYSTEM gate");
         if skip_gates + num_gates > R::n() {
@@ -117,6 +122,10 @@ impl<R: Rank> StageMask<R> {
     /// be at least 1 (it includes the SYSTEM gate). The number
     /// of gates will be `R::n() - skip_gates`, which is the maximum
     /// before bounds are reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns a capacity error if `skip_gates` exceeds the rank's gate bound.
     pub fn new_final(skip_gates: usize) -> Result<Self> {
         assert!(skip_gates > 0, "skip_gates must include the SYSTEM gate");
         if skip_gates > R::n() {
@@ -213,14 +222,6 @@ impl<F: Field, R: Rank> WiringObject<F, R> for StageMask<R> {
         _floor_plan: &[crate::floor_planner::ConstraintSegment],
     ) -> sparse::Polynomial<F, R> {
         self.notch_project(y)
-    }
-
-    fn constraint_counts(&self) -> (usize, usize) {
-        let num_gates = R::n();
-        // 4n-2 enforce_zero (all degrees from 4n-2 to 1, with dummies for
-        // active gates and the SYSTEM gate's inaccessible wires) + 1 enforce_one.
-        let num_constraints = 4 * R::n() - 1;
-        (num_gates, num_constraints)
     }
 
     fn segment_records(&self) -> &[crate::SegmentRecord] {
@@ -680,7 +681,7 @@ mod tests {
     }
 
     // Hand-written because the derive only re-emits each field's own
-    // invariants, dropping the cross-field `a == b` constraint that
+    // wire contracts, dropping the cross-field `a == b` constraint that
     // `ConstrainedStage::witness` imposes.
     impl<'dr, D: Driver<'dr>> Consistent<'dr, D> for TwoElements<'dr, D> {
         fn enforce_consistent(&self, dr: &mut D) -> Result<()> {
@@ -753,30 +754,6 @@ mod tests {
             Fp::ZERO,
             "valid witness should produce well-formed stage polynomial"
         );
-    }
-
-    #[test]
-    fn test_constraint_counts_matches_metrics() {
-        for skip in 1..10 {
-            for num in 0..(R::n() - skip) {
-                let stage_mask = StageMask::<R>::new(skip, num).unwrap();
-                let (mul_from_method, linear_from_method) =
-                    <StageMask<R> as WiringObject<Fp, R>>::constraint_counts(&stage_mask);
-
-                let metrics = metrics::eval_raw::<Fp, _>(&stage_mask).unwrap();
-
-                assert_eq!(
-                    mul_from_method, metrics.num_gates,
-                    "gate count mismatch for skip={}, num={}",
-                    skip, num
-                );
-                assert_eq!(
-                    linear_from_method, metrics.num_constraints,
-                    "constraint count mismatch for skip={}, num={}",
-                    skip, num
-                );
-            }
-        }
     }
 
     #[test]

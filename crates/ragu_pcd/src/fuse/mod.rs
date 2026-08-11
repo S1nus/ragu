@@ -61,7 +61,7 @@ impl<C: Cycle, R: Rank, const HEADER_SIZE: usize> Application<'_, C, R, HEADER_S
     ///   [`Application::rerandomize`] at a later point.
     /// * `step`: the [`Step`] instance that has been registered in this
     ///   [`Application`].
-    /// * `witness`: the witness data for the [`Step`]
+    /// * `witness`: the witness input for the [`Step`]
     /// * `left`: the left [`Pcd`] to fuse in this step; must correspond to the
     ///   [`Step::Left`] header.
     /// * `right`: the right [`Pcd`] to fuse in this step; must correspond to

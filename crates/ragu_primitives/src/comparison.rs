@@ -1,4 +1,4 @@
-//! Invariant-aware gadget equality.
+//! Wire-contract-aware gadget equality.
 
 use ragu_arithmetic::ff::Field;
 use ragu_core::{
@@ -16,11 +16,11 @@ use ragu_core::{
 /// for circuit code and may use gadget semantics to enforce equality with fewer
 /// constraints.
 pub trait GadgetEquals<F: Field>: GadgetKind<F> {
-    /// Enforce equality between two gadgets.
+    /// Enforces equality between two gadgets.
     ///
     /// Implementations may constrain fewer than all wire pairs by relying on
-    /// invariants established by the gadget's constructors or consistency
-    /// checks.
+    /// wire contracts enforced by the gadget's constructors or by
+    /// [`Consistent`](crate::consistent::Consistent).
     fn enforce_equal_gadget<
         'dr,
         D1: Driver<'dr, F = F>,

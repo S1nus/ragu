@@ -6,7 +6,7 @@
 //!
 //! # DFS-order indexing convention
 //!
-//! The floor plan is indexed by DFS synthesis order: `floor_plan[i]` describes
+//! The floor plan is indexed by DFS emission order: `floor_plan[i]` describes
 //! where the *i*-th segment (in DFS order) is placed in the polynomial. A
 //! reordering floor planner changes the **values** (offsets), not the
 //! **indices**. All consumers — the three `s(X, Y)` evaluators, the `rx`
@@ -16,7 +16,7 @@
 //! [`floor_plan`] function for details.
 //!
 //! ```text
-//!  Synthesis trace              Seg
+//!  Emission trace               Seg
 //!  ────────────────────────     ───
 //!  ├─ c0 ······················ [0]  (root)
 //!  ├─ call RoutineA
@@ -50,13 +50,13 @@ use super::metrics::SegmentRecord;
 /// The floor plan assigns absolute positions (offsets) and sizes to each
 /// segment in DFS order.
 ///
-/// The floor plan is indexed by DFS synthesis order: `floor_plan[i]`
-/// corresponds to the *i*-th segment encountered during synthesis. A reordering
-/// floor planner may assign different offset values but must preserve index
-/// correspondence. The root segment (index 0) must always be placed at
-/// the polynomial origin (both offsets zero).
+/// The floor plan is indexed by DFS emission order: `floor_plan[i]`
+/// corresponds to the *i*-th segment encountered during constraint emission. A
+/// reordering floor planner may assign different offset values but must
+/// preserve index correspondence. The root segment (index 0) must always be
+/// placed at the polynomial origin (both offsets zero).
 ///
-/// Currently, segments keep their synthesis (DFS) order and positions are
+/// Currently, segments keep their emission (DFS) order and positions are
 /// computed by a trivial prefix sum over per-segment constraint counts. A
 /// future floor planner could reorder segments for alignment or packing, but
 /// the current implementation does not.
@@ -76,7 +76,7 @@ pub struct ConstraintSegment {
 /// Computes a floor plan from per-segment constraint records.
 ///
 /// Converts per-segment constraint counts into absolute offsets via prefix
-/// sum, preserving synthesis (DFS) order.
+/// sum, preserving emission (DFS) order.
 pub fn floor_plan(segment_records: &[SegmentRecord]) -> Vec<ConstraintSegment> {
     let mut result = Vec::with_capacity(segment_records.len());
     let mut gate_start = 0usize;

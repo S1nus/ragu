@@ -107,7 +107,7 @@ pub trait Rank:
 
             dr.routine(txz::Evaluate::<Self>::new(), (x, z))
         })
-        .expect("should synthesize correctly without triggering inversion errors")
+        .expect("should emit constraints without triggering inversion errors")
         .value()
         .take()
     }

@@ -26,13 +26,13 @@ use super::{Header, internal::padded};
 /// Preserves the header's gadget structure. The gadget will be serialized with
 /// padding during the write phase. This is the efficient default used by most Steps.
 ///
-/// Different header types produce different circuit structures (e.g., a single-element
-/// header vs a tuple header will have different constraint systems).
+/// Different header types may emit different constraints, e.g. a single-element
+/// header and a tuple header allocate and serialize different gadgets.
 ///
 /// ## `Uniform` - Circuit-Uniform Encoding
 /// Pre-serializes the header into a fixed-size array of field elements using an
-/// emulator. This ensures identical circuit structure regardless of the underlying
-/// header type.
+/// emulator. This ensures identical emitted constraints regardless of the
+/// underlying header type.
 ///
 /// Used internally for rerandomization where `Rerandomize<H>` must produce the same
 /// circuit for any header type `H`. The tradeoff is reduced efficiency (emulation
@@ -41,13 +41,13 @@ use super::{Header, internal::padded};
 /// # Why Two Variants?
 ///
 /// Most Steps benefit from structural encoding (`Gadget`) - it's efficient and the
-/// circuit structure matches the computation. However, rerandomization requires that
-/// the same circuit handles any header type, necessitating the uniform encoding
-/// (`Uniform`) that erases type-level differences through serialization.
+/// emitted constraints match the header gadget. However, rerandomization requires
+/// that the same circuit handles any header type, necessitating the uniform
+/// encoding (`Uniform`) that erases type-level differences through serialization.
 enum EncodedInner<'dr, D: Driver<'dr>, H: Header<D::F>, const HEADER_SIZE: usize> {
-    /// Standard gadget encoding preserving structure (efficient, type-dependent circuit)
+    /// Standard gadget encoding preserving structure (efficient, type-dependent constraints).
     Gadget(Bound<'dr, D, H::Output>),
-    /// Uniform encoding as field elements (less efficient, type-independent circuit)
+    /// Uniform encoding as field elements (less efficient, type-independent constraints).
     Uniform(FixedVec<Element<'dr, D>, ConstLen<HEADER_SIZE>>),
 }
 
@@ -105,10 +105,18 @@ impl<'dr, D: Driver<'dr, F: PrimeField>, H: Header<D::F>, const HEADER_SIZE: usi
         Ok(())
     }
 
-    /// Creates a new encoded header by converting the header data into its gadget form.
+    /// Creates a new encoded header by converting the header data into its
+    /// gadget form.
     ///
-    /// This is the standard encoding method used by most Steps. The gadget structure
-    /// is preserved and will be serialized with padding during the write phase.
+    /// This is the standard encoding method used by most Steps. The header
+    /// gadget structure is preserved and will be serialized with padding during
+    /// the write phase.
+    ///
+    /// # Constraints
+    ///
+    /// `H::encode`, `H::Output` serialization, `HEADER_SIZE`, and the allocator's
+    /// behavior and state determine the constraints emitted while constructing
+    /// and writing the header.
     pub fn new<A: Allocator<'dr, D>>(
         dr: &mut D,
         allocator: &mut A,
@@ -117,15 +125,28 @@ impl<'dr, D: Driver<'dr, F: PrimeField>, H: Header<D::F>, const HEADER_SIZE: usi
         Ok(Encoded::from_gadget(H::encode(dr, allocator, witness)?))
     }
 
-    /// Creates a uniform encoded header for circuit-independent encoding.
+    /// Creates a uniform encoded header for type-independent encoding.
     ///
     /// This encoding method pre-serializes the header into field elements using an
-    /// emulator, ensuring that different header types produce identical circuit
-    /// structures. This is used internally for rerandomization to guarantee that
-    /// `Rerandomize<HeaderA>` and `Rerandomize<HeaderB>` synthesize the same circuit.
+    /// emulator, ensuring that different header types produce identical emitted
+    /// constraints. This is used internally for rerandomization to guarantee
+    /// that `Rerandomize<HeaderA>` and `Rerandomize<HeaderB>` emit the same
+    /// constraints.
     ///
-    /// The tradeoff: less efficient (requires emulation + serialization) but achieves
-    /// circuit uniformity across different header types.
+    /// The tradeoff: less efficient (requires emulation + serialization) but
+    /// achieves constraint uniformity across different header types.
+    ///
+    /// # Constraints
+    ///
+    /// `HEADER_SIZE` and the destination allocator's behavior and state determine
+    /// the emitted constraints. `H::encode` and `H::Output` serialization affect
+    /// only the wireless pre-serialization step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error if the serialized header exceeds
+    /// `HEADER_SIZE - 1` field elements. Header-specific errors from `H::encode`
+    /// are also propagated during wireless pre-serialization.
     pub(crate) fn new_uniform<A: Allocator<'dr, D>>(
         dr: &mut D,
         allocator: &mut A,

@@ -16,7 +16,7 @@ use crate::{
     io::{Buffer, Write},
 };
 
-/// An [`Element`] that has been constrained nonzero in the constraint system.
+/// An [`Element`] whose represented wire assignment is constrained nonzero.
 ///
 /// See [`Element::enforce_nonzero`].
 ///
@@ -28,10 +28,12 @@ pub struct Nonzero<'dr, D: Driver<'dr>> {
 }
 
 impl<'dr, D: Driver<'dr>> Nonzero<'dr, D> {
-    /// Wraps `element` without checking the nonzero invariant.
+    /// Wraps `element` as [`Nonzero`] without enforcing nonzeroness.
     ///
-    /// The caller is responsible for having emitted constraints that prove
-    /// `element` is nonzero.
+    /// # Preconditions
+    ///
+    /// The caller must enforce that the represented wire assignment is nonzero
+    /// before using the result as an ordinary [`Nonzero`].
     pub(crate) fn new_unchecked(element: Element<'dr, D>) -> Self {
         Self { element }
     }
@@ -51,6 +53,11 @@ impl<'dr, D: Driver<'dr>> Nonzero<'dr, D> {
     /// domain.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * self`, which is nonzero.
     pub fn square(&self, dr: &mut D) -> Result<Self> {
         Ok(Self::new_unchecked(self.element.square(dr)?))
     }
@@ -59,6 +66,11 @@ impl<'dr, D: Driver<'dr>> Nonzero<'dr, D> {
     /// nonzero since `F` is an integral domain.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self * other`, which is nonzero.
     pub fn mul(&self, dr: &mut D, other: &Self) -> Result<Self> {
         Ok(Self::new_unchecked(self.element.mul(dr, &other.element)?))
     }
@@ -67,6 +79,16 @@ impl<'dr, D: Driver<'dr>> Nonzero<'dr, D> {
     /// is nonzero since `F` is an integral domain.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent
+    /// `self / divisor`, which is nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the quotient assignment cannot
+    /// be computed from witness input.
     pub fn divide(&self, dr: &mut D, divisor: &Self) -> Result<Self> {
         Ok(Self::new_unchecked(self.element.divide(dr, divisor)?))
     }
@@ -123,15 +145,25 @@ pub struct Invertible<'dr, D: Driver<'dr>> {
 }
 
 impl<'dr, D: Driver<'dr>> Invertible<'dr, D> {
-    /// Allocate an [`Invertible`] field element.
-    ///
-    /// This will be unsatisfied (and fail to synthesize) if `value` is zero.
+    /// Allocates an [`Invertible`] field element.
     ///
     /// Computing the inverse witness costs a field inversion. If the inverse is
     /// already known, prefer
     /// [`alloc_with_advice`](Invertible::alloc_with_advice).
     ///
     /// This costs one gate and one constraint.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when `value` is nonzero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if `value` is zero.
     pub fn alloc(dr: &mut D, value: DriverValue<D, D::F>) -> Result<Self> {
         let inverse_value = D::try_just(|| {
             value
@@ -143,12 +175,24 @@ impl<'dr, D: Driver<'dr>> Invertible<'dr, D> {
         Self::alloc_with_advice(dr, value, inverse_value)
     }
 
-    /// Allocate an [`Invertible`] field element given its inverse as advice.
-    ///
-    /// This will be unsatisfied if `value` is zero or if `inverse_value` is not
-    /// really its multiplicative inverse.
+    /// Allocates an [`Invertible`] field element given its inverse as advice.
     ///
     /// This costs one gate and one constraint.
+    ///
+    /// # Soundness
+    ///
+    /// No satisfying assignment can make the represented element zero, and the
+    /// returned inverse represents its multiplicative inverse.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when `value` is nonzero and
+    /// `inverse_value` matches its inverse.
+    ///
+    /// # Errors
+    ///
+    /// A checking driver returns a local-check error if witness input does not
+    /// satisfy the emitted constraints.
     pub fn alloc_with_advice(
         dr: &mut D,
         value: DriverValue<D, D::F>,
@@ -259,9 +303,16 @@ impl<'dr, D: Driver<'dr>> NonzeroBank<'dr, D> {
         }
     }
 
-    /// Constructs a bank that asserts every fold is nonzero by external
-    /// argument. No constraints are emitted by `fold` or by dropping the
+    /// Constructs a bank that delegates every folded nonzero proof to an
+    /// external argument.
+    ///
+    /// No constraints are emitted by [`fold`](Self::fold) or by dropping the
     /// bank. Internal use only.
+    ///
+    /// # Preconditions
+    ///
+    /// Callers must use this only when every folded element is enforced nonzero
+    /// elsewhere or is nonzero by an external algebraic argument.
     pub(crate) fn new_unchecked() -> Self {
         Self { product: None }
     }
@@ -274,6 +325,16 @@ impl<'dr, D: Driver<'dr>> NonzeroBank<'dr, D> {
     ///
     /// This costs one gate and two constraints in discharging mode, and zero
     /// gates and zero constraints in unchecked mode.
+    ///
+    /// # Preconditions
+    ///
+    /// In unchecked mode, callers must ensure `elem` is enforced nonzero
+    /// elsewhere or is nonzero by an external algebraic argument.
+    ///
+    /// # Soundness
+    ///
+    /// In discharging mode, any satisfying assignment for a successfully
+    /// discharged scope makes every folded element nonzero.
     pub fn fold(&mut self, dr: &mut D, elem: Element<'dr, D>) -> Result<Nonzero<'dr, D>> {
         if let Some(product) = &mut self.product {
             *product = product.mul(dr, &elem)?;
@@ -281,7 +342,7 @@ impl<'dr, D: Driver<'dr>> NonzeroBank<'dr, D> {
         Ok(Nonzero::new_unchecked(elem))
     }
 
-    /// Discharges a discharging bank by constraining its product nonzero.
+    /// Discharges a discharging bank by enforcing its product nonzero.
     /// In unchecked mode this is a no-op. Only callable inside the crate;
     /// users reach this via [`scope`](Self::scope).
     pub(crate) fn enforce(self, dr: &mut D) -> Result<()> {
@@ -302,6 +363,21 @@ impl<'dr, D: Driver<'dr>> NonzeroBank<'dr, D> {
     /// This costs one gate and two constraints for the final discharge, plus
     /// one gate and two constraints per [`fold`](Self::fold) in discharging
     /// mode, on top of whatever the body itself emits.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment for a successful scope makes every folded
+    /// element nonzero.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input for every folded
+    /// element is nonzero and the body succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the final nonzero assignment
+    /// cannot be computed from witness input, or an error returned by the body.
     pub fn scope<T>(
         dr: &mut D,
         body: impl FnOnce(&mut D, &mut NonzeroBank<'dr, D>) -> Result<T>,

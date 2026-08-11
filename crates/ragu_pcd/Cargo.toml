@@ -62,6 +62,7 @@ ff = { workspace = true }
 pasta_curves = { workspace = true }
 rand = { workspace = true }
 criterion = { workspace = true }
+ragu_circuits = { path = "../ragu_circuits", version = "0.0.0", default-features = false, features = ["alloc", "test-utils"] }
 ragu_pasta = { path = "../ragu_pasta", version = "0.0.0", features = ["baked"] }
 gungraun = { workspace = true }
 ragu_testing = { path = "../ragu_testing", version = "0.0.0" }

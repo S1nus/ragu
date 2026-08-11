@@ -55,11 +55,18 @@ where
     ///
     /// The circuit must declare `Output = ()`. Non-empty output would
     /// be serialized into output-binding constraints by the standard
-    /// synthesis path, contributing to $k(Y)$ and violating the bonding
-    /// invariant that $k(Y) \equiv 0$. This is enforced at the type level.
+    /// constraint-emission path, contributing to $k(Y)$ and violating the
+    /// bonding requirement that $k(Y) \equiv 0$. The `Output = ()` bound makes
+    /// this a type-level requirement.
     ///
     /// The `ONE`-wire contribution is stripped so that the constant term in $Y$
     /// is zero, as required of a bonding polynomial.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if the supplied circuit violates the structural
+    /// restrictions above by using the `ONE` wire, emitting a gate, or allocating
+    /// a constant after the stage builder is finalized.
     ///
     /// [`Driver::gate`]: ragu_core::drivers::DriverTypes::gate
     /// [`Driver::mul`]: ragu_core::drivers::Driver::mul
@@ -67,12 +74,18 @@ where
     /// [`Driver::constant`]: ragu_core::drivers::Driver::constant
     /// [`Driver::enforce_zero`]: ragu_core::drivers::Driver::enforce_zero
     /// [`Driver::ONE`]: ragu_core::drivers::Driver::ONE
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ragu_core::Error::InvalidWitness`] if the circuit violates
+    /// the bonding restrictions, or propagates any error from the standard
+    /// wiring-object construction pipeline.
     pub fn into_bonding_object<'a>(self) -> Result<BondingObject<'a, F, R>>
     where
         Self: 'a,
         S: MultiStageCircuit<F, R, Output = ()>,
     {
-        // Validate: run synthesis with a driver that rejects ONE usage
+        // Validate: run constraint emission with a driver that rejects ONE usage
         // and — after the stage builder finalizes — mul/gate.
         let mut validator = BondingValidator::<F>::new();
         self.circuit.witness(
@@ -252,14 +265,6 @@ impl<F: Field, R: Rank> WiringObject<F, R> for Stripped<'_, F, R> {
         correction.d.push(F::ONE);
         poly.sub_assign(&correction.build());
         poly
-    }
-
-    // TODO(#614): revisit constraint_counts semantics — ambiguous with
-    // system constraints (enforce_one, registry key, SYSTEM gate).
-    fn constraint_counts(&self) -> (usize, usize) {
-        let (mul, lin) = self.0.constraint_counts();
-        // The inner object includes the `enforce_one` constraint that we strip.
-        (mul, lin - 1)
     }
 
     fn segment_records(&self) -> &[SegmentRecord] {

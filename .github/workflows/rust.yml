@@ -25,6 +25,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      fuzz: ${{ steps.filter.outputs.fuzz }}
       book: ${{ steps.filter.outputs.book }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -42,6 +43,10 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/rust.yml'
               - '.github/actions/**'
+            fuzz:
+              - 'qa/fuzz/**'
+              - '.github/workflows/fuzz-cron.yml'
+              - '.github/workflows/fuzz-coverage.yml'
             book:
               - 'book/**'
 
@@ -221,7 +226,7 @@ jobs:
   fuzz-check:
     name: fuzz harness check (nightly)
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.fuzz == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -301,6 +306,7 @@ jobs:
       - test-32-bit
       - build-nostd
       - bitrot
+      - fuzz-check
       - docs
       - book
     runs-on: ubuntu-latest

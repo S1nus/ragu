@@ -1,6 +1,6 @@
 ---
 name: fv-review
-description: Explicitly invoked only. Lessons learned from porting Ragu Rust circuits to Clean Lean formal verification reimpls — when not to formalize an empty circuit, picking FormalCircuit vs FormalAssertion vs GeneralFormalCircuit, mirroring Rust delegation, length polymorphism, naming conventions, and reading proof failures (stuck goals, hypotheses you're forced to add) as under-constraint / undocumented-precondition bug signals. Distilled from PR review feedback (mitschabaude et al.) and refined over time. Do NOT auto-trigger on general formal verification, Lean, or Ragu questions; only invoke when the user explicitly types `/fv-review` or asks by name.
+description: Explicitly invoked only. Lessons learned from porting Ragu Rust circuits to Clean Lean formal verification reimpls — when not to formalize an empty circuit, picking FormalCircuit vs FormalAssertion vs GeneralFormalCircuit, mirroring Rust delegation, length polymorphism, naming conventions, reading proof failures (stuck goals, hypotheses you're forced to add) as under-constraint / undocumented-precondition bug signals, and treating heartbeat timeouts as design signals (add a label — boxed sub-gadget, explicit output, blessed combinator, @[irreducible] seal — not a budget). Distilled from PR review feedback (mitschabaude et al.) and refined over time. Do NOT auto-trigger on general formal verification, Lean, or Ragu questions; only invoke when the user explicitly types `/fv-review` or asks by name.
 ---
 
 # Ragu Formal Verification: Lessons Learned
@@ -290,6 +290,35 @@ A related warning to expect: `automatically included section variable(s) unused 
 
 The `same_constraints` / `same_output` equivalence proofs and the autogen trace files were removed in favor of the fingerprint equivalence check ([#786](https://github.com/tachyon-zcash/ragu/issues/786)): the reimpl's op trace is now compared against the Rust extractor's by digest in CI, with no per-instance Lean proof to maintain. The foldl-unfolding simp recipe that used to live here (`Circuit.foldl` → `Vector.foldlM_toList` → `List.foldlM_cons` peeling) is in git history if a byte-matching proof over op lists is ever needed again.
 
+## Heartbeat timeouts are a design linter — add a label, not a budget
+
+A `(deterministic) timeout at whnf / tactic execution` means the elaborator is **deriving by brute force** something that should be **declared as structure**. Reaching for `set_option maxHeartbeats` first is the failure mode: it lets broken proofs grind for 30+ minutes instead of failing in seconds, and the budgets go stale (PR #711 carried a 1B-heartbeat umbrella plus 16M/1B bumps on Lift/Alloc instance files that all turned out unnecessary once the structure was fixed — the proofs fit the default 4M budget).
+
+**The mental model.** Every fact about a circuit is either *derived* (recomputed by unfolding, at every use site, with no simp shortcuts in whnf) or *looked up* (declared once on a "label", consulted everywhere). Heartbeat fires = something is being derived that should be a lookup. The taxonomy:
+
+| Layer | What it is | Example |
+|---|---|---|
+| label | a declared, once-proved fact | `localLength := 36` field, `foldl.localLength_eq` lemma, a child's `Spec` |
+| index | registration making a label auto-discoverable | the `@[circuit_norm]` tag |
+| access | per-proof list of which boxes may open | `simp [main, Step.circuit, …]`, `circuit_proof_start [...]` args |
+| factory | certifying scripts that ran once at definition | the `simp` blocks inside `elaborated` fields — they become proof terms |
+
+Some labels are deliberately *not* indexed: `Ragu.CircuitFlattening`'s `*_toFlat` projection lemmas are invoked manually with `rw` because generated definitions like `exportedOperations` become looping simp rules if tagged. Indexing is a global commitment; keep situational labels manual.
+
+**Diagnose what's burning, then pick the matching structural move:**
+
+| Symptom | Move |
+|---|---|
+| Facts about a multi-subcircuit composite recomputed at every use | **Box it** — bundle it as a named sub-gadget with its own `elaborated` (no extraction instance needed; sub-gadget carve-out applies) |
+| Loop with no symbolic lemmas (raw `Vector.foldlM`, recursive helper) | **Use the blessed combinator** (`Circuit.foldl`) so `circuit_norm` collapses it to `∀ i` / closed-form arithmetic — the `64` stays symbolic, nothing unrolls |
+| `Circuit.foldl`'s default `_const_out`/`_constant` synthesis times out | **Declare `output` explicitly** on the body gadget's `elaborated` (the `Element.Mul` idiom: `output _ offset := varFromOffset field (offset + k)`) — the synthesis becomes a shallow projection instead of a whnf through the body |
+| Unifier/kernel unrolls a big `main` during structure-update type checks (e.g. the `circuit` bundle) | **Seal it**: `@[irreducible]` on `main`. This blocks whnf/defeq only — proofs still unfold via the equation lemma (`simp [main, …]`), and the foldl's default tactics run during `main`'s own elaboration, before the attribute takes effect |
+| Proof stalls on un-collapsed subcircuit terms | **Name the boxes** — you forgot a `circuit/Assumptions/Spec` triple in `circuit_proof_start` |
+
+**Worked example (PR #711, `Endoscalar.GroupScale`).** A 64-iteration loop whose body inlined 5 subcircuit calls needed 1B heartbeats and still ground for 30+ minutes on `subcircuitsConsistent`. The fix was all four moves at once: bundle the body as `Step` (a `GeneralFormalCircuit.WithHint` with explicit `output`), switch `main` to `Circuit.foldl` of that single subcircuit, seal `main` with `@[irreducible]`. Result: zero `set_option`s in the whole tree, `localLength_eq` and `subcircuitsConsistent` each close with one `simp +arith [main, circuit_norm, <subs>]` line, and the 25-line manual `ConstantLength` proof became unnecessary. `NonzeroBank.Scope` is the polymorphic-K version of the same pattern.
+
+**When a bump is legitimate:** genuinely irreducible one-time cost (elaborating a 3000-op autogen literal). Even then, scope it to the declaration (`set_option ... in`), never file-wide, and treat the line as flagged tech debt: "structural fix not yet found here."
+
 ## Watch for false justifications
 
 Reviewers flag explanatory comments that aren't actually true (literal review verdict: "lie"). If a doc comment claims "Clean doesn't support X" or "this requires dependent types we don't expose", verify against the Clean codebase before writing it — those claims tend to be wrong.
@@ -345,6 +374,7 @@ Steps 1–2 can swap. Sub-gadgets stop after step 5.
 - [tachyon-zcash/ragu#674](https://github.com/tachyon-zcash/ragu/pull/674) — mitschabaude review (Boolean gadget). Verdict: "agents missed the compositionality of clean and wrote specs that just repeat the math equations instead of translating them into higher-level programming statements." Threads: r3138867768, r3138904103, r3138963958, r3138965755, r3138972958, r3138991793, r3139002146, r3139003436, r3139007420, r3139012715.
 - [tachyon-zcash/ragu#710](https://github.com/tachyon-zcash/ragu/pull/710) — mitschabaude review (`EnforceRootOfUnity`, `Fold` polymorphism). Top-level note: "clean has a couple of loop constructs with simp support in `circuit_proof_start` / `circuit_norm`. We use these whenever we need a loop: `Circuit.forEach`, `Circuit.map`, `Circuit.mapFinRange`, `Circuit.foldl`, `Circuit.foldlRange`." Inline suggestions r3265194082, r3265194093. Slack follow-up clarified the principle: "use foldl which behaves well" (not "make foldlRange behave better"); "clean users are not supposed to have to call simplification lemmas explicitly." Worked examples in `qa/lean/Ragu/Circuits/Element/{EnforceRootOfUnity,Fold}.lean`.
 - [tachyon-zcash/ragu#761](https://github.com/tachyon-zcash/ragu/pull/761) — endoscalar `Endoscalar::extract` under-constraint, surfaced by formalization (demonstration spike, not merged). The per-bit QR-branch constraint is satisfied by *both* bit values at `elem + i = 0`, leaving the bit forgeable. Reading proof failures as bug signals: unconditional soundness wedges at `⊢ False` (`ExtractStuckDemo`), the negation is provable (`extract_unsound` — `elem=0, bit=0, sqrt=0` satisfies every constraint but the bit should be `1`), and conditional soundness surfaces the precondition `elem + i ≠ 0` (`extract_sound_of_shifted_ne_zero`) — true in Ragu only because `elem` is a Fiat-Shamir hash, so sound in usage but unsound in isolation. Spike: `qa/lean/Ragu/Contrib/ExtractSoundnessSpike.lean`.
+- [tachyon-zcash/ragu#711](https://github.com/tachyon-zcash/ragu/pull/711) — `Endoscalar::group_scale` port (Step-bundle refactor). Source of "Heartbeat timeouts are a design linter": a 64-iteration loop with a 5-subcircuit inline body needed a 1B-heartbeat umbrella and still ground 30+ minutes on `subcircuitsConsistent`; boxing the body as a `Step` sub-gadget (explicit `output`), switching to `Circuit.foldl`, and sealing `main` with `@[irreducible]` removed every `set_option` from the tree. Also where the stale-budget lesson came from: the Lift/Alloc instance files' 16M/1B bumps turned out unnecessary under the post-#741 toolchain. Worked examples: `qa/lean/Ragu/Circuits/Endoscalar/GroupScale.lean` (Step), `qa/lean/Ragu/Circuits/NonzeroBank/Scope.lean` (polymorphic-K analogue), `qa/lean/Ragu/CircuitFlattening.lean` (deliberately-unindexed labels).
 
 <!-- Append new lessons below this line as they emerge from review feedback. -->
 

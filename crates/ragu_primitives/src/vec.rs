@@ -102,6 +102,11 @@ impl<T, L: Len> TryFrom<Vec<T>> for FixedVec<T, L> {
 pub trait CollectFixed: Iterator + Sized {
     /// Collect this iterator into a [`FixedVec`], returning an error if the
     /// length does not match [`L::len()`](Len::len).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::VectorLengthMismatch`] if the collected iterator length
+    /// does not match [`L::len()`](Len::len).
     fn collect_fixed<L: Len>(self) -> Result<FixedVec<Self::Item, L>> {
         FixedVec::try_from(self.collect::<Vec<_>>())
     }
@@ -109,6 +114,12 @@ pub trait CollectFixed: Iterator + Sized {
     /// Collect this iterator of [`ragu_core::Result`]s into a [`FixedVec`],
     /// short-circuiting on the first error, then returning an error if the
     /// length does not match [`L::len()`](Len::len).
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by the iterator, or
+    /// [`Error::VectorLengthMismatch`] if the collected length does not match
+    /// [`L::len()`](Len::len).
     fn try_collect_fixed<T, L: Len>(self) -> Result<FixedVec<T, L>>
     where
         Self: Iterator<Item = Result<T>>,
@@ -123,6 +134,11 @@ impl<I: Iterator> CollectFixed for I {}
 impl<T, L: Len> FixedVec<T, L> {
     /// Creates a new [`FixedVec`] from a vector, returning an error if the
     /// length does not match [`L::len()`](Len::len).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::VectorLengthMismatch`] if `v.len()` does not match
+    /// [`L::len()`](Len::len).
     pub fn new(v: Vec<T>) -> Result<Self> {
         Self::try_from(v)
     }
@@ -143,6 +159,12 @@ impl<T, L: Len> FixedVec<T, L> {
     /// Initialize a [`FixedVec`] using a closure that initializes each element
     /// based on its index, returning an error instead if the closure ever
     /// returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by `f`, or
+    /// [`Error::VectorLengthMismatch`] if the constructed vector length does
+    /// not match [`L::len()`](Len::len).
     pub fn try_from_fn<F>(f: F) -> Result<Self>
     where
         F: FnMut(usize) -> Result<T>,

@@ -59,13 +59,13 @@ impl<C: Cycle, R: Rank, H: Header<C::CircuitField>> Pcd<C, R, H> {
     }
 
     /// Returns a reference to the recursive proof.
-    pub(crate) fn proof(&self) -> &Proof<C, R> {
+    pub fn proof(&self) -> &Proof<C, R> {
         &self.proof
     }
 
     /// Consumes the proof-carrying data and returns the proof and data
     /// separately.
-    pub(crate) fn into_parts(self) -> (Proof<C, R>, H::Data) {
+    pub fn into_parts(self) -> (Proof<C, R>, H::Data) {
         (self.proof, self.data)
     }
 }

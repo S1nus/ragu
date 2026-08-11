@@ -28,23 +28,28 @@ use crate::{
     util::InternalMaybe,
 };
 
-/// Represents a wire that is constrained to be zero or one, along with its
-/// corresponding [`bool`] value.
+/// Represents a wire constrained to be zero or one, along with its
+/// witness [`bool`] value.
 #[derive(Gadget, GadgetEquals)]
 pub struct Boolean<'dr, D: Driver<'dr>> {
     /// The wire constrained to hold either `0` or `1` in the scalar field.
     #[ragu(wire)]
     wire: D::Wire,
 
-    /// The witness value of this boolean.
+    /// Witness data for this boolean.
     #[ragu(value)]
     value: DriverValue<D, bool>,
 }
 
 impl<'dr, D: Driver<'dr>> Boolean<'dr, D> {
-    /// Allocates a boolean with the provided witness value.
+    /// Allocates a boolean with the provided witness input value.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the represented wire assignment equal
+    /// to `0` or `1`.
     pub fn alloc<A: crate::allocator::Allocator<'dr, D>>(
         dr: &mut D,
         allocator: &mut A,
@@ -75,8 +80,14 @@ impl<'dr, D: Driver<'dr>> Boolean<'dr, D> {
         Boolean { wire, value }
     }
 
-    /// Computes the AND of two booleans. This costs one gate and two
-    /// constraints.
+    /// Computes the AND of two booleans.
+    ///
+    /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned boolean represent
+    /// `self && other`.
     pub fn and(&self, dr: &mut D, other: &Self) -> Result<Self> {
         let result = D::just(|| self.value.snag() & other.value.snag());
         let (a, b, c) = dr.mul(|| {
@@ -99,6 +110,11 @@ impl<'dr, D: Driver<'dr>> Boolean<'dr, D> {
     /// Returns `a` when false, `b` when true.
     ///
     /// This costs one gate and two constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned element represent `a` when
+    /// this boolean is false and `b` when this boolean is true.
     pub fn conditional_select(
         &self,
         dr: &mut D,
@@ -112,9 +128,16 @@ impl<'dr, D: Driver<'dr>> Boolean<'dr, D> {
     }
 
     /// Conditionally enforces that two elements are equal.
-    /// When this boolean is true, enforces `a == b`; when false, no constraint.
+    ///
+    /// When this boolean is true, the emitted constraints require `a == b`;
+    /// when false, they do not require equality.
     ///
     /// This costs one gate and three constraints.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment with this boolean true makes `a` and `b`
+    /// represent equal field elements.
     pub fn conditional_enforce_equal(
         &self,
         dr: &mut D,
@@ -245,6 +268,11 @@ impl<F: Field> Promotion<F> for Kind![F; @Boolean<'_, _>] {
 /// Packs boolean slices into field elements using little-endian bit order.
 ///
 /// The first bit in each chunk is the least significant bit.
+///
+/// # Constraints
+///
+/// The number of bits determines the emitted virtual wire expressions. The
+/// length must not be derived from witness input.
 pub fn multipack<'dr, D: Driver<'dr, F: ragu_arithmetic::ff::PrimeField>>(
     dr: &mut D,
     bits: &[Boolean<'dr, D>],

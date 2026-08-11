@@ -154,6 +154,11 @@ impl<'dr, D: Driver<'dr>, P: ragu_arithmetic::PoseidonPermutation<D::F>> Sponge<
     }
 
     /// Squeeze a value from the sponge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ragu_core::Error::Initialization`] if no values have been
+    /// absorbed yet, or any synthesis error from the internal permutation.
     pub fn squeeze(&mut self, dr: &mut D) -> Result<Element<'dr, D>> {
         match &mut self.mode {
             Mode::Squeeze { values, .. } => {
@@ -192,6 +197,11 @@ impl<'dr, D: Driver<'dr>, P: ragu_arithmetic::PoseidonPermutation<D::F>> Sponge<
     }
 
     /// Absorb a value into the sponge.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any synthesis error from the internal permutation needed
+    /// when the absorb buffer is full or when switching out of squeeze mode.
     pub fn absorb(&mut self, dr: &mut D, value: &Element<'dr, D>) -> Result<()> {
         match &mut self.mode {
             Mode::Squeeze { state, .. } => {

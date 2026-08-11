@@ -41,9 +41,13 @@ pub struct Point<'dr, D: Driver<'dr>, C: CurveAffine<Base = D::F>> {
 }
 
 impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
-    /// Creates a new `Point` from the given coordinates without checking that
-    /// the provided $x, y$ satisfy the curve equation. The caller is
-    /// responsible for ensuring this.
+    /// Creates a new `Point` from the given coordinates without enforcing that
+    /// the provided $x, y$ satisfy the curve equation.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller must enforce or derive the curve equation before using the
+    /// result as an ordinary [`Point`].
     fn new_unchecked(x: Nonzero<'dr, D>, y: Nonzero<'dr, D>) -> Self {
         Point {
             x,
@@ -52,11 +56,23 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
         }
     }
 
-    /// Allocate a point on the curve. This will return an error if the provided
-    /// point is at infinity.
+    /// Allocates a point on the curve from witness input.
     ///
     /// This method uses [`Element::alloc_square`] to allocate coordinates and
     /// then enforces the curve equation.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent an affine
+    /// point on the curve with nonzero coordinates.
+    ///
+    /// # Completeness
+    ///
+    /// Witness generation succeeds when witness input is not the identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input is the identity.
     pub fn alloc(dr: &mut D, p: DriverValue<D, C>) -> Result<Self> {
         let coordinates = D::try_just(|| {
             let coordinates = p.take().coordinates().into_option();
@@ -82,8 +98,11 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
         ))
     }
 
-    /// Obtain a constant point in the circuit. Fails if the point is the
-    /// identity.
+    /// Embeds a constant point.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if `p` is the identity.
     pub fn constant(dr: &mut D, p: C) -> Result<Self> {
         if let Some(coordinates) = p.coordinates().into_option() {
             let x = Element::constant(dr, *coordinates.x());
@@ -110,12 +129,21 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
     }
 
     /// Applies the endomorphism to this point.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent the
+    /// endomorphism of `self`.
     pub fn endo(&self, dr: &mut D) -> Self {
         let endo_x = self.x.scale(dr, Coeff::Arbitrary(C::Base::ZETA));
         Point::new_unchecked(Nonzero::new_unchecked(endo_x), self.y.clone())
     }
 
     /// Negates this point.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent `-self`.
     pub fn negate(&self, dr: &mut D) -> Self {
         Point {
             x: self.x.clone(),
@@ -124,7 +152,13 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
         }
     }
 
-    /// Apply the endomorphism iff the provided condition is true.
+    /// Applies the endomorphism iff the provided condition is true.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent `self`
+    /// when `condition` is false and the endomorphism of `self` when
+    /// `condition` is true.
     pub fn conditional_endo(&self, dr: &mut D, condition: &Boolean<'dr, D>) -> Result<Self> {
         let endo_x = self.x.scale(dr, Coeff::Arbitrary(D::F::ZETA));
         let x = condition.conditional_select(dr, &self.x, &endo_x)?;
@@ -134,7 +168,12 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
         ))
     }
 
-    /// Apply the negation map iff the provided condition is true.
+    /// Applies the negation map iff the provided condition is true.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent `self`
+    /// when `condition` is false and `-self` when `condition` is true.
     pub fn conditional_negate(&self, dr: &mut D, condition: &Boolean<'dr, D>) -> Result<Self> {
         let neg_y = self.y.negate(dr);
         let y = condition.conditional_select(dr, &self.y, &neg_y)?;
@@ -146,6 +185,16 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
 
     /// Doubles this point. Ragu does not support curves with points of order
     /// two, and thus all affine points have affine doubles.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment makes the returned point represent
+    /// `self + self`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if the slope assignment cannot be
+    /// computed from witness input.
     pub fn double(&self, dr: &mut D) -> Result<Self> {
         // delta = 3x^2 / 2y
         let double_y = self.y.double(dr);
@@ -171,9 +220,20 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
 
     /// Computes `self + other` via incomplete affine addition.
     ///
-    /// This method works only when `self` and `other` have distinct
-    /// x-coordinates. The provided `bank` is used to discharge this condition
-    /// on behalf of the caller.
+    /// # Exceptional Cases
+    ///
+    /// This method requires `self.x != other.x`. The provided `bank` is used to
+    /// discharge this requirement on behalf of the caller.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment for the enclosing bank scope makes the
+    /// returned point represent `self + other`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input falls into the
+    /// exceptional case.
     pub fn add_incomplete(
         &self,
         dr: &mut D,
@@ -201,9 +261,21 @@ impl<'dr, D: Driver<'dr, F = C::Base>, C: CurveAffine> Point<'dr, D, C> {
     /// Computes $\[2\] Q + P$ using the standard $(Q + P) + Q$
     /// [trick](https://github.com/zcash/zcash/issues/3924).
     ///
-    /// This method only works when `self` and `other` have distinct
-    /// x-coordinates, and the result is not the identity. The provided `bank`
-    /// is used to discharge both of these conditions on behalf of the caller.
+    /// # Exceptional Cases
+    ///
+    /// This method requires `self.x != other.x` and requires the intermediate
+    /// incomplete additions to avoid the identity. The provided `bank` is used
+    /// to discharge these requirements on behalf of the caller.
+    ///
+    /// # Soundness
+    ///
+    /// Any satisfying assignment for the enclosing bank scope makes the
+    /// returned point represent the documented `[2] Q + P` relation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a witness-generation error if witness input falls into an
+    /// exceptional case.
     pub fn double_and_add_incomplete(
         &self,
         dr: &mut D,

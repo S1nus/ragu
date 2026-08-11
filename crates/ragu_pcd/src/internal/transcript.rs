@@ -297,7 +297,7 @@ mod tests {
         /// cutoff. The cutoff falls after an arbitrary mix of absorbs and
         /// squeezes.
         ///
-        /// Two invariants are enforced by construction:
+        /// Two properties are enforced by construction:
         /// - `before_ops` ends with a guaranteed `Absorb` so `save_state` is
         ///   called while the sponge is in absorb mode.
         /// - `after_ops` starts with a guaranteed `Squeeze` so

@@ -5,7 +5,9 @@ package Ragu where
   leanOptions := #[
     ⟨`pp.unicode.fun, true⟩,
     ⟨`autoImplicit, false⟩,
-    ⟨`relaxedAutoImplicit, false⟩]
+    ⟨`relaxedAutoImplicit, false⟩,
+    ⟨`maxHeartbeats, (4000000 : Nat)⟩,
+    ⟨`maxRecDepth, (2000 : Nat)⟩]
 
 @[default_target]
 lean_lib Ragu where

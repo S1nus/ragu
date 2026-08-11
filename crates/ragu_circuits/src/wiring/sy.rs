@@ -8,17 +8,17 @@
 //!
 //! Unlike [`sx`] which can build coefficients incrementally, $s(X, y)$
 //! coefficients cannot be computed in a strictly streaming order during
-//! synthesis.
+//! constraint emission.
 //!
 //! ### Why Deferred Computation?
 //!
 //! Consider the coefficient of $X^j$ in $s(X, y)$: it equals $\sum\_{q=0}^{Q-1}
 //! \mathbf{U}\_{j,q} \cdot y^q$, where $\mathbf{U}\_{j,q}$ is determined by
 //! which wires appear in constraint $q$ and $Q$ is the total constraint count.
-//! During synthesis, constraints arrive one at a time—we learn $U\_{j,0}$ from
-//! the first constraint, $U\_{j,1}$ from the second, and so on. The complete
-//! coefficient of $X^j$ remains unknown until all $q$ constraints have been
-//! processed.
+//! During constraint emission, constraints arrive one at a time—we learn
+//! $U\_{j,0}$ from the first constraint, $U\_{j,1}$ from the second, and so on.
+//! The complete coefficient of $X^j$ remains unknown until all $q$ constraints
+//! have been processed.
 //!
 //! This contrasts with [`sx`], where each constraint produces a complete
 //! coefficient $c\_j$ that can be stored immediately (because the $Y$ powers
@@ -355,9 +355,9 @@ struct SyScope<F: Field> {
 /// A [`Driver`] that computes $s(X, y)$ at a fixed $y$.
 ///
 /// Given a fixed evaluation point $y \in \mathbb{F}$, this driver interprets
-/// circuit synthesis operations to produce the polynomial $s(X, y)$.
-/// Unlike [`sx`] and [`sxy`] which use immediate evaluation, this driver uses
-/// deferred computation through virtual wires (see [module documentation](self)).
+/// circuit operations to produce the polynomial $s(X, y)$. Unlike [`sx`] and
+/// [`sxy`] which use immediate evaluation, this driver uses deferred
+/// computation through virtual wires (see [module documentation](self)).
 ///
 /// [`Driver`]: ragu_core::drivers::Driver
 /// [`sx`]: super::sx
@@ -374,8 +374,8 @@ struct Evaluator<'table, 'sy, 'fp, F: Field, R: Rank> {
 
     /// Reference to the virtual table for wire management.
     ///
-    /// Shared via [`RefCell`] to allow mutable access during synthesis while
-    /// maintaining multiple [`Wire`] handles.
+    /// Shared via [`RefCell`] to allow mutable access during constraint
+    /// emission while maintaining multiple [`Wire`] handles.
     virtual_table: &'table RefCell<VirtualTable<'sy, F, R>>,
 
     /// Floor plan mapping DFS segment index to absolute offsets.
@@ -478,7 +478,7 @@ impl<'table, 'sy, F: Field, R: Rank> DriverScope<SyScope<F>> for Evaluator<'tabl
 
 /// Configures associated types for the [`Evaluator`] driver.
 ///
-/// - `MaybeKind = Empty`: No witness values are needed; we only compute
+/// - `MaybeKind = Empty`: No witness input is needed; we only compute
 ///   polynomial structure.
 /// - `LCadd`: Uses [`TermCollector`] to build deferred term lists for virtual
 ///   wires.
@@ -716,7 +716,7 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
             assert_eq!(
                 evaluator.current_routine + 1,
                 evaluator.floor_plan.len(),
-                "floor plan routine count must match synthesis"
+                "floor plan routine count must match constraint emission"
             );
             assert_eq!(
                 evaluator.scope.gates, evaluator.floor_plan[0].num_gates,
@@ -728,8 +728,8 @@ pub fn eval<F: Field, RC: RawCircuit<F>, R: Rank>(
             );
         }
 
-        // Invariant: all virtual wires must have been freed during synthesis,
-        // indicating proper reference counting and no leaked wires.
+        // Invariant: all virtual wires must have been freed during constraint
+        // emission, indicating proper reference counting and no leaked wires.
         let virtual_table = virtual_table.into_inner();
         assert_eq!(virtual_table.free.len(), virtual_table.wires.len());
     }

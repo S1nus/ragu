@@ -27,9 +27,10 @@ p(X)\cdot q(X) =c(X)= \sum_{k=0}^{8n-2}c_k\cdot X^k
 \text{ and } c_{4n-1}=\revdot{\v{p}}{\v{q}}
 $$
 
-This is exactly what we need! If we multiply $\hat{r}(X)\cdot r(zX)$, the
+This is exactly what we need! If we multiply $r(X)$ by $(r(zX) + s(X,y) + t(X,z))$, the
 coefficient of its $X^{4n-1}$ term equals
-$\revdot{\v{r}}{\v{r} \circ{\v{z^{4n}}}}$—the left side of our constraint.
+$\revdot{\v{r}}{\v{r}\circ\v{z^{4n}} + \v{t} + \v{s}}$—the left side of our
+constraint.
 
 But there's a problem. Our trace polynomials have degree less than $4n$, so
 their product $c(X)$ has degree up to $8n-2$. We could commit to this
@@ -133,8 +134,8 @@ Here's how the protocol flows:
    polynomials only_.
 
 5. **Product and decomposition**: The prover computes the product polynomial
-   $\hat{r}(X) \cdot r(zX)$, decomposes it into $c_1(X)$ and $c_2(X)$ using the
-   trick we described earlier, and commits to both.
+   $r(X) \cdot (r(zX) + s(X,y) + t(X,z))$, decomposes it into $c_1(X)$
+   and $c_2(X)$ using the trick we described earlier, and commits to both.
 
 6. **Verification**: The verifier runs the checks we'll describe below.
 
@@ -172,8 +173,9 @@ constant `ONE`, which is a convention in our constraint system.
 This PIOP works, but it's not as efficient as we'd like. Here are the main
 bottlenecks:
 
-**Prover overhead**: Computing the product polynomial $\hat{r}(X) \cdot r(zX)$
-and then decomposing it into $c_1(X)$ and $c_2(X)$ is expensive. We need at
+**Prover overhead**: Computing the product polynomial
+$r(X) \cdot (r(zX) + s(X,y) + t(X,z))$ and then decomposing it into
+$c_1(X)$ and $c_2(X)$ is expensive. We need at
 least 3 FFTs over a domain of size $8n-2$[^prod-cost]. This is the most
 expensive step for the prover.
 

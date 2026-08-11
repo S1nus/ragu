@@ -45,6 +45,11 @@ impl<'a, 'dr, D: Driver<'dr>> Horner<'a, 'dr, D> {
 
     /// Finishes the evaluation with a trailing constant $1$ term appended,
     /// following the $k(Y)$ polynomial convention.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from writing the trailing constant term into this
+    /// buffer.
     pub fn finish_ky(mut self, dr: &mut D) -> Result<Element<'dr, D>> {
         Element::one().write(dr, &mut self)?;
         Ok(self.finish(dr))

@@ -11,7 +11,7 @@
 //! - **Alloc-optimized circuits** leave most `b`/`c`-wire coefficients zero for
 //!   allocation gates and the `d`-wire zero for multiplication gates.
 //! - **Stage polynomials** are zero outside a small active region.
-//! - **Tail-sparse vectors** have long trailing zero runs after synthesis.
+//! - **Tail-sparse vectors** have long trailing zero runs after construction.
 //!
 //! # Construction
 //!

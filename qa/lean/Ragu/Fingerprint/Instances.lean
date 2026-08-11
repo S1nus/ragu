@@ -36,7 +36,10 @@ def instances : List (String × Ragu.Core.Statements.FormalInstance) := [
   ("Ragu.Instances.Boolean.Alloc", Ragu.Instances.Boolean.Alloc.formal_instance),
   ("Ragu.Instances.Boolean.And", Ragu.Instances.Boolean.And.formal_instance),
   ("Ragu.Instances.Boolean.ConditionalSelect", Ragu.Instances.Boolean.ConditionalSelect.formal_instance),
-  ("Ragu.Instances.Boolean.ConditionalEnforceEqual", Ragu.Instances.Boolean.ConditionalEnforceEqual.formal_instance)
+  ("Ragu.Instances.Boolean.ConditionalEnforceEqual", Ragu.Instances.Boolean.ConditionalEnforceEqual.formal_instance),
+  ("Ragu.Instances.Endoscalar.Alloc", Ragu.Instances.Endoscalar.Alloc.formal_instance),
+  ("Ragu.Instances.Endoscalar.GroupScale", Ragu.Instances.Endoscalar.GroupScale.formal_instance),
+  ("Ragu.Instances.Endoscalar.Lift", Ragu.Instances.Endoscalar.Lift.formal_instance)
 ]
 
 end Ragu.Fingerprint

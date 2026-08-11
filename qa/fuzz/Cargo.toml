@@ -1,4 +1,6 @@
-# cargo-fuzz harness for ragu_testing.
+# cargo-fuzz harness. Self-contained: the generated-program substrate and the
+# patcher engine live in this crate's own library (`src/`), which the targets
+# under `fuzz_targets/` depend on.
 #
 # Deliberately excluded from the top-level workspace (see `members` in the
 # repo-root Cargo.toml). Fuzz targets require nightly toolchain + libfuzzer
@@ -32,13 +34,13 @@ arbitrary = { version = "1", features = ["derive"] }
 ff = { version = "0.14", default-features = false }
 group = { version = "0.14", default-features = false }
 pasta_curves = { git = "https://github.com/ebfull/pasta_curves", rev = "5a84fc0d13f738f54c43fb1f9e28ecf1d358dcf5", features = ["deferred"] }
-ragu_testing = { path = "../../crates/ragu_testing" }
 ragu_arithmetic = { path = "../../crates/ragu_arithmetic" }
 ragu_primitives = { path = "../../crates/ragu_primitives" }
 ragu_pasta = { path = "../../crates/ragu_pasta", features = ["baked"] }
 ragu_core = { path = "../../crates/ragu_core" }
 ragu_circuits = { path = "../../crates/ragu_circuits" }
 ragu_pcd = { path = "../../crates/ragu_pcd", features = ["unstable-fuzzing"] }
+proptest = "1"
 rand = "0.10"
 
 # Poseidon sponge: absorb/squeeze mode transitions + save/resume consistency
@@ -82,6 +84,57 @@ bench = false
 [[bin]]
 name = "fuzz_circuit_revdot_identity"
 path = "fuzz_targets/fuzz_circuit_revdot_identity.rs"
+test = false
+doc = false
+bench = false
+
+# Witness-pinning soundness oracle: mutates one occupied coefficient of
+# the assembled trace polynomial and requires the revdot constraint
+# identity to reject. The constraint-side under-constrained-gadget
+# oracle that fuzz_witness_cheat (Simulator-side) structurally cannot
+# be.
+[[bin]]
+name = "fuzz_witness_pinning"
+path = "fuzz_targets/fuzz_witness_pinning.rs"
+test = false
+doc = false
+bench = false
+
+# The "patcher" technique (issue #728): mutate one witness input, repair
+# every downstream wire by re-tracing, and assert the assembled constraint
+# identity matches an independent native oracle over a ragu_testing::substrate
+# program (real enforce_zero anchors, full grammar minus value-fallible ops).
+# Also cross-checks the Simulator verdict against the identity to catch
+# driver-vs-wiring disagreements.
+[[bin]]
+name = "fuzz_circuit_cheat"
+path = "fuzz_targets/fuzz_circuit_cheat.rs"
+test = false
+doc = false
+bench = false
+
+# The patcher with a real repair engine (issues #728, #793, #796): a
+# recording Driver captures the constraint graph ragu emits for a
+# ragu_testing::substrate program, then mutations to free advice wires are
+# repaired by propagating through the *captured* constraints (not by
+# re-running gadget logic). Disagreement with the substrate's native oracle
+# is the under-constrained-advice signal that re-trace-based repair cannot
+# see. Also runs the rank/nullity oracle, the zero-divisor and booleanity
+# must-reject oracles, and a Playback cross-check of the recorder's capture.
+[[bin]]
+name = "fuzz_advice_patcher"
+path = "fuzz_targets/fuzz_advice_patcher.rs"
+test = false
+doc = false
+bench = false
+
+# Completeness / over-constraint fuzzing (issues #728, #793): the dual of
+# the patcher. For an anchorless program over the infallible vocabulary
+# every preamble witness is valid, so ragu's real Simulator must accept all
+# of them; a rejection is an over-constrained gadget (a completeness bug).
+[[bin]]
+name = "fuzz_completeness"
+path = "fuzz_targets/fuzz_completeness.rs"
 test = false
 doc = false
 bench = false
@@ -139,8 +192,8 @@ doc = false
 bench = false
 
 # Mid-stream witness cheating: honest vs cheat paths through the Simulator.
-# Currently a Simulator-robustness fuzzer; intended as a soundness oracle once
-# the patcher work lands (see issue tracking the patcher technique).
+# Simulator-robustness fuzzer; constraint-side soundness oracles live in
+# fuzz_witness_pinning and fuzz_circuit_cheat.
 [[bin]]
 name = "fuzz_witness_cheat"
 path = "fuzz_targets/fuzz_witness_cheat.rs"

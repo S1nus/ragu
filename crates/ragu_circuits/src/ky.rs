@@ -16,6 +16,12 @@ use super::Circuit;
 
 /// Evaluates $k(y)$ for the given circuit and instance at a point $y$, without
 /// collecting intermediate coefficients.
+///
+/// # Errors
+///
+/// Propagates any error from allocating the evaluation point, synthesizing the
+/// instance gadget, streaming it into Horner form, or finalizing the
+/// evaluation.
 pub fn eval<F: Field, C: Circuit<F>>(circuit: &C, instance: C::Instance<'_>, y: F) -> Result<F> {
     let mut dr = Emulator::extractor();
     let y_elem = Element::alloc(&mut dr, &mut (), Always::<F>::just(|| y))?;

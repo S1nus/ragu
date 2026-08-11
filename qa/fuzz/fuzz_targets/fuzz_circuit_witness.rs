@@ -1,11 +1,13 @@
 //! Fuzz `Circuit::witness` pipeline correctness against a native oracle.
 //!
-//! Drives two reference circuits — `SquareCircuit { times }` and
-//! `MySimpleCircuit` — with fuzzer-chosen witnesses, and checks pairwise
-//! consistency across three pipelines:
+//! Drives a menu of circuits — an arbitrary generated
+//! [`ragu_testing_fuzz::substrate`] program plus bespoke point/routine/boolean
+//! circuits — with fuzzer-chosen witnesses, and checks pairwise consistency
+//! across three pipelines:
 //!
-//! 1. **Native spec**: a plain Rust function computing each circuit's
-//!    output directly from the witness, no driver involved.
+//! 1. **Native spec**: a plain Rust function (or the substrate's native
+//!    shadow) computing each circuit's output directly from the witness, no
+//!    driver involved.
 //! 2. **Simulator synthesis**: `circuit.witness(&mut Simulator, w)`; the
 //!    `Simulator` driver enforces every gate identity inline, then exposes
 //!    each output `Element`'s witness value.
@@ -38,19 +40,20 @@
 //!
 //! ## Circuit coverage
 //!
-//! `SquareCircuit` exercises a single gadget (`Element::square`) in a
-//! parameterized loop. `MySimpleCircuit` exercises `Element::square`,
-//! `Element::mul`, `Element::add`, `Element::sub`, and an explicit
-//! `Driver::enforce_zero` constraint over a two-element witness with a
-//! two-element output. Together they cover most of `Element`'s arithmetic
-//! surface.
+//! The `Generated` arm covers `Element`'s arithmetic and boolean surface
+//! over arbitrary [`ragu_testing_fuzz::substrate`] programs — the broad,
+//! fuzzer-driven replacement for the former hand-written `SquareCircuit`
+//! and `MySimpleCircuit` arms. The remaining arms are bespoke circuits
+//! exercising gadget families the substrate grammar does not generate
+//! (points, custom routines), kept for their end-to-end Circuit-pipeline
+//! coverage.
 //!
 //! Circuit menu (each is a `CircuitChoice` arm exercising one gadget
 //! family end-to-end through `Circuit::witness`):
 //!
-//! - **`SquareCircuit`** — `Element::square` loop.
-//! - **`MySimpleCircuit`** — `Element::{square, mul, add, sub}` plus an
-//!   explicit `Driver::enforce_zero` constraint.
+//! - **`Generated`** — arbitrary substrate programs (`Element` arithmetic,
+//!   `alloc_square`, booleans, conditional select, fold), checked against
+//!   the substrate's native shadow.
 //! - **`BoolCircuit`** — `Boolean::{alloc, and, not, conditional_select}`.
 //! - **`PointCircuit`** — `Point::{alloc, endo, negate}` over `EpAffine`,
 //!   complementing `fuzz_endoscalar`'s gadget-level coverage with an
@@ -83,15 +86,14 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use core::cell::OnceCell;
 use ff::Field;
 use ff::PrimeField;
 use ff::WithSmallOrderMulGroup;
 use group::Curve;
 use group::CurveAffine as _;
-use pasta_curves::arithmetic::CurveAffine;
 use libfuzzer_sys::fuzz_target;
 use pasta_curves::Fp;
+use pasta_curves::arithmetic::CurveAffine;
 use ragu_arithmetic::Coeff;
 use ragu_circuits::{
     Circuit, CircuitExt, WithAux,
@@ -107,26 +109,22 @@ use ragu_core::{
 };
 use ragu_pasta::{EpAffine, Fq};
 use ragu_primitives::{Boolean, Element, Point, Simulator, allocator::Standard};
-use ragu_testing::circuits::{MySimpleCircuit, SquareCircuit};
+use ragu_testing_fuzz::substrate::{
+    Limits, OpSet, Overrides, Preamble, Program, ProgramCircuit, shadow_eval, steer,
+    synthesize_with_witness,
+};
 use std::sync::LazyLock;
 
 #[derive(Arbitrary, Debug)]
 enum CircuitChoice {
-    /// `SquareCircuit { times }` over a single-Fp witness.
-    Square {
-        times: u8,
-        witness_seed: u64,
-        use_special: Option<u8>,
-    },
-    /// `MySimpleCircuit` over a `(Fp, Fp)` witness. The circuit's internal
-    /// constraint is `a^5 == b^2`; many randomly chosen `(a, b)` pairs will
-    /// not satisfy it (drivers will reject). The `derive_b_from_a` mode
-    /// picks `b = sqrt(a^5)` so the witness is always satisfying.
-    Simple {
-        a_seed: u64,
-        b_seed: u64,
-        use_special_a: Option<u8>,
-        derive_b_from_a: bool,
+    /// An arbitrary [`ragu_testing_fuzz::substrate`] program as a
+    /// [`ProgramCircuit`]. Replaces the former hand-written `SquareCircuit`
+    /// and `MySimpleCircuit` arms with broad fuzzer-driven coverage of
+    /// `Element` arithmetic, `alloc_square`, booleans, conditional select,
+    /// and fold — checked against the substrate's native shadow.
+    Generated {
+        /// Raw program bytes, decoded via [`Program::decode`].
+        program: Vec<u8>,
     },
     /// `BoolCircuit` over a `(bool, bool, Fp, Fp)` witness. Exercises
     /// `Boolean::{alloc, and, not, conditional_select}`.
@@ -140,9 +138,7 @@ enum CircuitChoice {
     /// `PointCircuit` over an `EpAffine` witness derived from a fuzzer-chosen
     /// Fq scalar. Exercises `Point::{alloc, endo, negate}` end-to-end through
     /// `Circuit::witness`.
-    Point {
-        scalar_seed: u64,
-    },
+    Point { scalar_seed: u64 },
     /// `RoutineCircuit` over a single Fp witness. Exercises
     /// `Driver::routine` and the `Routine::{predict, execute}` split via
     /// the `Prediction::Unknown(aux)` path.
@@ -182,48 +178,6 @@ fn special_value(idx: u8) -> Fp {
     }
 }
 
-/// Per-`times` registry cache for `SquareCircuit`. Building a registry
-/// runs the floor planner over `times` squarings — comfortably more
-/// expensive than the per-input checks. Memoizing across inputs turns
-/// the hot path into trace + assemble after each distinct `times` is
-/// observed once. Mirrors the cache in `fuzz_sxy_agreement.rs:42-69`.
-struct SquareRegistryCache {
-    slots: [OnceCell<core::result::Result<Registry<'static, Fp, TestRank>, ()>>; 120],
-}
-
-// SAFETY: libfuzzer runs the fuzz target on a single thread, so the
-// interior-mutable `OnceCell` slots are never accessed concurrently.
-// `LazyLock` requires `Sync` to compile.
-unsafe impl Sync for SquareRegistryCache {}
-
-static SQUARE_REGISTRY_CACHE: LazyLock<SquareRegistryCache> =
-    LazyLock::new(|| SquareRegistryCache {
-        slots: [const { OnceCell::new() }; 120],
-    });
-
-fn square_registry_for(times: usize) -> Option<&'static Registry<'static, Fp, TestRank>> {
-    debug_assert!((1..=120).contains(&times));
-    SQUARE_REGISTRY_CACHE.slots[times - 1]
-        .get_or_init(|| {
-            let circuit = SquareCircuit { times };
-            RegistryBuilder::<Fp, TestRank>::new()
-                .register_circuit(circuit)
-                .and_then(|b| b.finalize())
-                .map_err(|_| ())
-        })
-        .as_ref()
-        .ok()
-}
-
-/// `MySimpleCircuit` takes no parameters, so a single global memoized
-/// registry suffices.
-static SIMPLE_REGISTRY: LazyLock<Option<Registry<'static, Fp, TestRank>>> = LazyLock::new(|| {
-    RegistryBuilder::<Fp, TestRank>::new()
-        .register_circuit(MySimpleCircuit)
-        .and_then(|b| b.finalize())
-        .ok()
-});
-
 static BOOL_REGISTRY: LazyLock<Option<Registry<'static, Fp, TestRank>>> = LazyLock::new(|| {
     RegistryBuilder::<Fp, TestRank>::new()
         .register_circuit(BoolCircuit)
@@ -252,36 +206,6 @@ static KNOWN_ROUTINE_REGISTRY: LazyLock<Option<Registry<'static, Fp, TestRank>>>
             .and_then(|b| b.finalize())
             .ok()
     });
-
-/// Native spec for `SquareCircuit`: compute `w^(2^times)` by repeated
-/// squaring directly in the field.
-fn square_native(witness: Fp, times: usize) -> Fp {
-    let mut acc = witness;
-    for _ in 0..times {
-        acc = acc.square();
-    }
-    acc
-}
-
-/// Native spec for `MySimpleCircuit`. Returns:
-/// - `Some((c, d))` if the witness satisfies `a^5 == b^2`, with
-///    `c = a + b`, `d = a - b`.
-/// - `None` if the witness violates the constraint; both `Simulator` and
-///    `trace::eval` must reject.
-fn simple_native(a: Fp, b: Fp) -> Option<(Fp, Fp)> {
-    let a5 = a.pow_vartime([5u64]);
-    let b2 = b.square();
-    if a5 != b2 {
-        return None;
-    }
-    Some((a + b, a - b))
-}
-
-/// Try to compute `b = sqrt(a^5)` so that `(a, b)` is a satisfying witness
-/// for `MySimpleCircuit`. Returns `None` if `a^5` is a non-residue.
-fn derive_satisfying_b(a: Fp) -> Option<Fp> {
-    Option::<Fp>::from(a.pow_vartime([5u64]).sqrt())
-}
 
 // ---------------------------------------------------------------------------
 // BoolCircuit — exercises `Boolean::alloc`, `Boolean::and`, `Boolean::not`,
@@ -603,145 +527,66 @@ fuzz_target!(|input: Input| {
     let alphas_distinct = input.alpha_a_seed != input.alpha_b_seed && alpha_a != alpha_b;
 
     match input.circuit {
-        CircuitChoice::Square {
-            times,
-            witness_seed,
-            use_special,
-        } => {
-            let times = ((times as usize) % 120).max(1);
-            let witness: Fp = match use_special {
-                Some(idx) => special_value(idx),
-                None => Fp::from(witness_seed),
-            };
-            let registry = match square_registry_for(times) {
-                Some(r) => r,
-                None => return, // rank-bound exceeded for high `times`
-            };
-            let circuit = SquareCircuit { times };
-            let expected = square_native(witness, times);
-
-            let mut sim_value: Option<Fp> = None;
-            let sim_result = Simulator::<Fp>::simulate(witness, |dr, w_just| {
-                let cw = circuit.witness(dr, w_just)?;
-                let elem = cw.into_output();
-                sim_value = Some(*elem.value().take());
-                Ok(())
-            });
-
-            if sim_result.is_err() {
-                // `SquareCircuit` has no `enforce_zero` constraints, so
-                // any Simulator rejection here would be a plumbing bug;
-                // surface it before returning.
-                panic!(
-                    "Simulator rejected SquareCircuit witness={witness:?} times={times} \
-                     — SquareCircuit has no constraints that could fail"
-                );
+        CircuitChoice::Generated { program } => {
+            // The full grammar, steered so the honest witness never hits a
+            // value-dependent gadget failure.
+            let program = steer::<Fp>(&Program::decode(&program, OpSet::ALL, Limits::default()));
+            if program.ops.is_empty() {
+                return;
             }
 
-            let sim_value = sim_value.expect("Simulator Ok without writing value");
+            let honest = shadow_eval::<Fp>(&program, Overrides::none());
+            let circuit = ProgramCircuit {
+                program: &program,
+                anchors: &honest.anchors,
+            };
+            let registry = match RegistryBuilder::<Fp, TestRank>::new()
+                .register_circuit(circuit)
+                .and_then(|b| b.finalize())
+            {
+                Ok(r) => r,
+                Err(_) => return, // rank overflow
+            };
+            let witness: [Fp; Preamble::LEN] = program.preamble.values();
+
+            // 1. Synthesis correctness: the Simulator's final element values
+            //    match the native shadow's, gadget for gadget.
+            let mut sim_values: Option<Vec<Fp>> = None;
+            let sim_result = Simulator::<Fp>::simulate(witness, |dr, w| {
+                let stacks = synthesize_with_witness(
+                    dr,
+                    &mut Standard::new(),
+                    &program,
+                    w,
+                    &honest.anchors,
+                )?;
+                sim_values = Some(stacks.elems.iter().map(|e| *e.value().take()).collect());
+                Ok(())
+            });
+            if sim_result.is_err() {
+                // The honest witness pins every anchor by construction and
+                // the steered program never fails a gadget, so a rejection
+                // here is a plumbing bug.
+                panic!("Simulator rejected an honest steered program: {program:?}");
+            }
+            let sim_values = sim_values.expect("Simulator Ok without writing values");
             assert_eq!(
-                sim_value, expected,
-                "SquareCircuit: synthesis output != native w^(2^times): \
-                 witness={witness:?}, times={times}, sim={sim_value:?}, expected={expected:?}"
+                sim_values, honest.elems,
+                "Generated: synthesis output != native shadow. Program: {program:?}"
             );
 
-            // Simulator accepted, so trace::eval must accept too (one-way
-            // implication; see header docstring).
+            // 2. Simulator accept ⇒ trace::eval accept (one-way; see header).
             let trace = match circuit.trace(witness) {
                 Ok(t) => t.into_output(),
                 Err(_) => panic!(
-                    "trace::eval rejected SquareCircuit witness={witness:?} times={times} \
-                     but Simulator accepted — driver disagreement"
+                    "trace::eval rejected an honest program but Simulator accepted \
+                     — driver disagreement. Program: {program:?}"
                 ),
             };
 
+            // 3. alpha-injection contract.
             if alphas_distinct {
-                check_alpha_injection(registry, &trace, alpha_a, alpha_b);
-            }
-        }
-
-        CircuitChoice::Simple {
-            a_seed,
-            b_seed,
-            use_special_a,
-            derive_b_from_a,
-        } => {
-            let a: Fp = match use_special_a {
-                Some(idx) => special_value(idx),
-                None => Fp::from(a_seed),
-            };
-            let b: Fp = if derive_b_from_a {
-                match derive_satisfying_b(a) {
-                    Some(v) => v,
-                    None => return, // a^5 is a non-residue; skip
-                }
-            } else {
-                Fp::from(b_seed)
-            };
-
-            let registry = match SIMPLE_REGISTRY.as_ref() {
-                Some(r) => r,
-                None => return,
-            };
-            let circuit = MySimpleCircuit;
-            let expected = simple_native(a, b); // None iff a^5 != b^2
-
-            let mut sim_value: Option<(Fp, Fp)> = None;
-            let sim_result = Simulator::<Fp>::simulate((a, b), |dr, w_just| {
-                let cw = circuit.witness(dr, w_just)?;
-                let (c_elem, d_elem) = cw.into_output();
-                sim_value = Some((*c_elem.value().take(), *d_elem.value().take()));
-                Ok(())
-            });
-
-            // Simulator is the constraint checker. Its accept/reject must
-            // match the native prediction (`expected.is_some()`).
-            match (expected, sim_result.is_ok()) {
-                (None, true) => panic!(
-                    "MySimpleCircuit: Simulator accepted unsatisfying witness \
-                     a={a:?}, b={b:?} (a^5 != b^2)"
-                ),
-                (Some(_), false) => panic!(
-                    "MySimpleCircuit: Simulator rejected satisfying witness \
-                     a={a:?}, b={b:?}"
-                ),
-                _ => {}
-            }
-
-            // trace::eval is a pure recorder; it accepts any witness that
-            // can be evaluated, satisfying or not. The required implication
-            // is one-way: Simulator accept ⇒ trace accept.
-            let trace_result = circuit.trace((a, b));
-            if sim_result.is_ok() && trace_result.is_err() {
-                panic!(
-                    "MySimpleCircuit: Simulator accepted but trace::eval rejected \
-                     for a={a:?}, b={b:?} — driver disagreement"
-                );
-            }
-
-            // Output-value check requires a satisfying witness (Simulator
-            // accepted). For unsatisfying witnesses we skip the output check
-            // but still exercise assembly if trace::eval recorded values.
-            if let Some((expected_c, expected_d)) = expected {
-                let (sim_c, sim_d) = sim_value.expect("Simulator Ok without writing value");
-                assert_eq!(
-                    sim_c, expected_c,
-                    "MySimpleCircuit: c output != a+b for a={a:?}, b={b:?}"
-                );
-                assert_eq!(
-                    sim_d, expected_d,
-                    "MySimpleCircuit: d output != a-b for a={a:?}, b={b:?}"
-                );
-            }
-
-            // assemble_with_alpha is a property of the assembly function,
-            // independent of whether the underlying witness is satisfying,
-            // so we run it on any trace::eval success.
-            if let Ok(trace) = trace_result {
-                let trace = trace.into_output();
-                if alphas_distinct {
-                    check_alpha_injection(registry, &trace, alpha_a, alpha_b);
-                }
+                check_alpha_injection(&registry, &trace, alpha_a, alpha_b);
             }
         }
 

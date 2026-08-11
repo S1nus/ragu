@@ -36,7 +36,7 @@ The [`Emulator`] operates in two modes:
 
 | Constructor | Mode | Wire | Use Case |
 |---|---|---|---|
-| [`Emulator::execute()`] | `Wireless<Always<()>, F>` | `()` | Native witness execution |
+| [`Emulator::execute()`] | `Wireless<Always<()>, F>` | `()` | Native witness generation |
 | [`Emulator::counter()`] | `Wireless<Empty, F>` | `()` | Wire counting, static analysis |
 | [`Emulator::extractor()`] | `Wired<F>` | `F` | Wire extraction |
 | [`Emulator::wireless()`] | `Wireless<M, F>` | `()` | Generic (parameterized [`MaybeKind`]) |
