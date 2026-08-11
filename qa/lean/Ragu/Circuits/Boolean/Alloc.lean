@@ -29,6 +29,11 @@ def ProverAssumptions (_input : Bool) (_data : ProverData (F p)) (_hint : Prover
 def Spec (_input : Unit) (out : F p) (_data : ProverData (F p)) :=
   IsBool out
 
+/-- The honest prover's output wire holds exactly the hint bit. Callers use
+this to chain witness values through composed completeness proofs. -/
+def ProverSpec (input : Bool) (out : F p) (_hint : ProverHint (F p)) :=
+  out = if input then 1 else 0
+
 instance elaborated
     : ElaboratedCircuit (F p) (Unconstrained Bool) field where
   main
@@ -46,19 +51,21 @@ theorem soundness
 
 theorem completeness
     : GeneralFormalCircuit.WithHint.Completeness (F p) elaborated
-        ProverAssumptions (fun _ _ _ => True) := by
+        ProverAssumptions ProverSpec := by
   circuit_proof_start
   obtain ⟨_, hx, hy, hz⟩ := h_env
   -- hx : a = v, hy : b = 1 - v, hz : c = v * (1 - v), where v ∈ {0, 1}.
-  refine ⟨?_, ?_⟩
+  refine ⟨⟨?_, ?_⟩, ?_⟩
   · rw [hz]; by_cases h : input <;> simp [h]
   · rw [hx, hy]; ring
+  · exact hx
 
 def circuit : GeneralFormalCircuit.WithHint (F p) (Unconstrained Bool) field :=
   { elaborated with
     Assumptions := Assumptions,
     Spec := Spec,
     ProverAssumptions := ProverAssumptions,
+    ProverSpec := ProverSpec,
     soundness := soundness,
     completeness := completeness }
 

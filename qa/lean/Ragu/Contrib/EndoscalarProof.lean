@@ -595,4 +595,177 @@ theorem endoscaleN_injective_of_characteristicBound_lt
   endoscaleN_injective_of_eisensteinNorm_bound hζ hp
     (fun _ _ hne => endoscale_eisensteinNorm_bound hne)
 
+/-! ## No-collision integer core for `Endoscalar::group_scale` (BGH19, Appendix C)
+
+`group_scale` runs over a prime-order-`q` group on which the curve
+endomorphism `φ(x, y) = (ζ·x, y)` acts as `[λ]` for an order-3 scalar `λ`.
+Writing the accumulator after `m` consumed 2-bit pairs as `[u·λ + v]P` with
+`(u, v) = accIndex (pairs.take m)`, every exceptional case of the gadget's
+unchecked incomplete additions is the vanishing of a small integer
+combination `a·λ + b`:
+
+* init: `φ(P).x = P.x` ⟺ `λ = ±1` — combinations `(1, ∓1)`;
+* per step, first addition: `acc = ±s` — combinations
+  `(u ∓ δu, v ∓ δv)` for a step index `δ ∈ {(0, ±1), (±1, 0)}`;
+* per step, second addition: `s = -2·acc` — combinations
+  `(2u + δu, 2v + δv)`.
+
+This section proves all of these are nonzero in `F` whenever the
+characteristic exceeds `groupScaleCollisionBound` — the number-theoretic
+core of the Appendix C no-collision argument. The remaining (future) work
+is curve-side: relating the affine accumulator to `[u·λ + v]P` via the
+group law, at which point `groupScaleNative ≠ none` becomes a theorem
+rather than an assumption. -/
+
+/-- Step-point indices: `s ∈ {±P, ±φ(P)}` has index `(δu, δv)` meaning
+`[δu·λ + δv]P`. -/
+def StepIndex (δ : ℤ × ℤ) : Prop :=
+  δ = (0, 1) ∨ δ = (0, -1) ∨ δ = (1, 0) ∨ δ = (-1, 0)
+
+/-- The integer index pair `(u, v)` (meaning `[u·λ + v]P`) of the
+group-scale accumulator after consuming `pairs`, each pair being
+`(negate_bit, endo_bit)` in the gadget's consumption order. The start
+`(2, 2)` is `acc₀ = [2·λ + 2]P`, i.e. `(p.endo() + p).double()`. -/
+def accIndex (pairs : List (Bool × Bool)) : ℤ × ℤ :=
+  pairs.foldl
+    (fun acc ab =>
+      let s : ℤ := if ab.1 then -1 else 1
+      if ab.2 then (2 * acc.1 + s, 2 * acc.2) else (2 * acc.1, 2 * acc.2 + s))
+    (2, 2)
+
+/-- Uniform characteristic bound for the 64-iteration group-scale collision
+families: every exceptional combination has Eisenstein norm at most
+`3·(2^66)² = 3·2^132`, comfortably below the Pasta characteristics
+(≈ 2^254). -/
+def groupScaleCollisionBound : ℕ := 3 * (2 ^ 66) ^ 2
+
+private def uDigit (ab : Bool × Bool) : ℤ :=
+  if ab.2 then (if ab.1 then -1 else 1) else 0
+
+private def vDigit (ab : Bool × Bool) : ℤ :=
+  if ab.2 then 0 else (if ab.1 then -1 else 1)
+
+private theorem abs_uDigit_le_one (ab : Bool × Bool) : |uDigit ab| ≤ 1 := by
+  rcases ab with ⟨n, e⟩
+  cases n <;> cases e <;> simp [uDigit]
+
+private theorem abs_vDigit_le_one (ab : Bool × Bool) : |vDigit ab| ≤ 1 := by
+  rcases ab with ⟨n, e⟩
+  cases n <;> cases e <;> simp [vDigit]
+
+private theorem accIndex_foldl_eq (pairs : List (Bool × Bool)) (start : ℤ × ℤ) :
+    pairs.foldl
+      (fun acc ab =>
+        let s : ℤ := if ab.1 then -1 else 1
+        if ab.2 then (2 * acc.1 + s, 2 * acc.2) else (2 * acc.1, 2 * acc.2 + s))
+      start = (signedFold uDigit start.1 pairs, signedFold vDigit start.2 pairs) := by
+  induction pairs generalizing start with
+  | nil => simp [signedFold]
+  | cons ab rest ih =>
+    rcases ab with ⟨n, e⟩
+    cases n <;> cases e <;>
+      simp only [List.foldl_cons, ih, signedFold, uDigit, vDigit] <;>
+      norm_num
+
+private theorem accIndex_eq (pairs : List (Bool × Bool)) :
+    accIndex pairs = (signedFold uDigit 2 pairs, signedFold vDigit 2 pairs) :=
+  accIndex_foldl_eq pairs (2, 2)
+
+/-- Both accumulator index components stay in `[2^m + 1, 3·2^m − 1]` after
+`m` pairs; in particular they are at least `2`, so no accumulator index ever
+degenerates to a step index. -/
+theorem accIndex_bounds (pairs : List (Bool × Bool)) :
+    2 ^ pairs.length + 1 ≤ (accIndex pairs).1 ∧
+    (accIndex pairs).1 ≤ 3 * 2 ^ pairs.length - 1 ∧
+    2 ^ pairs.length + 1 ≤ (accIndex pairs).2 ∧
+    (accIndex pairs).2 ≤ 3 * 2 ^ pairs.length - 1 := by
+  have hu := signedFold_bound abs_uDigit_le_one pairs 2
+  have hv := signedFold_bound abs_vDigit_le_one pairs 2
+  rcases abs_le.mp hu with ⟨hu1, hu2⟩
+  rcases abs_le.mp hv with ⟨hv1, hv2⟩
+  rw [accIndex_eq]
+  dsimp only
+  omega
+
+private theorem eisensteinNorm_pos_of_fst_pos {a b : ℤ} (ha : 0 < a) :
+    0 < eisensteinNorm a b := by
+  have hid : 4 * eisensteinNorm a b = (a + b) ^ 2 + 3 * (a - b) ^ 2 := by
+    dsimp [eisensteinNorm]; ring
+  rcases lt_or_eq_of_le (show 0 ≤ eisensteinNorm a b by
+    nlinarith [sq_nonneg (a + b), sq_nonneg (a - b)]) with h | h
+  · exact h
+  · exfalso
+    have h1 : a + b = 0 := by nlinarith [sq_nonneg (a + b), sq_nonneg (a - b)]
+    have h2 : a - b = 0 := by nlinarith [sq_nonneg (a + b), sq_nonneg (a - b)]
+    omega
+
+/-- The modular engine: a combination `a·ζ + b` with `0 < a` and both
+components bounded by `2^66` cannot vanish in a field of characteristic
+above `groupScaleCollisionBound`. -/
+private theorem combination_ne_zero {F : Type*} [Field F] {q : ℕ} [CharP F q] {ζ : F}
+    (hζ : orderOf ζ = 3) (hq : groupScaleCollisionBound < q)
+    {a b : ℤ} (ha : 0 < a) (haM : a ≤ 2 ^ 66) (hbM : |b| ≤ 2 ^ 66) :
+    (a : F) * ζ + (b : F) ≠ 0 := by
+  intro hcol
+  have hnormCast : (eisensteinNorm a b : F) = 0 :=
+    eisensteinNorm_cast_eq_zero_of_collision
+      (zeta_sq_add_zeta_add_one_eq_zero_of_orderOf_three hζ) hcol
+  have hdvd : (q : ℤ) ∣ eisensteinNorm a b :=
+    (CharP.intCast_eq_zero_iff F q _).mp hnormCast
+  have hpos : 0 < eisensteinNorm a b := eisensteinNorm_pos_of_fst_pos ha
+  have hq_le : (q : ℤ) ≤ eisensteinNorm a b := Int.le_of_dvd hpos hdvd
+  rcases abs_le.mp hbM with ⟨hb1, hb2⟩
+  have hub : eisensteinNorm a b ≤ ((groupScaleCollisionBound : ℕ) : ℤ) := by
+    have hbound : ((groupScaleCollisionBound : ℕ) : ℤ) = 3 * (2 ^ 66) ^ 2 := by
+      norm_num [groupScaleCollisionBound]
+    rw [hbound]
+    dsimp [eisensteinNorm]
+    nlinarith [sq_nonneg (a - b), sq_nonneg (a + b), mul_pos ha ha]
+  have hcontra : (q : ℤ) ≤ ((groupScaleCollisionBound : ℕ) : ℤ) :=
+    le_trans hq_le hub
+  exact absurd (by exact_mod_cast hcontra) (not_le.mpr hq)
+
+/-- The init addition's index content: an order-3 `λ` is neither `1` nor
+`-1`, so `φ(P).x ≠ P.x` for points of odd prime order. -/
+theorem orderOf_three_ne_one_and_ne_neg_one {F : Type*} [Field F] {ζ : F}
+    (hζ : orderOf ζ = 3) : ζ ≠ 1 ∧ ζ ≠ -1 := by
+  constructor
+  · intro h
+    rw [h] at hζ
+    simp at hζ
+  · intro h
+    have h2 : ζ ^ 2 = 1 := by rw [h]; ring
+    have hdvd := orderOf_dvd_of_pow_eq_one h2
+    rw [hζ] at hdvd
+    omega
+
+/-- The Appendix C no-collision integer core for `group_scale`'s 64-step
+loop: for any prefix of at most 63 pairs and any step index `δ`, the three
+exceptional-case combinations — accumulator equals `s` (`(u−δu, v−δv)`),
+accumulator equals `−s` (`(u+δu, v+δv)`), and `s = −2·acc`
+(`(2u+δu, 2v+δv)`) — are all nonzero in characteristic above
+`groupScaleCollisionBound`. -/
+theorem groupScale_collision_combinations_ne_zero
+    {F : Type*} [Field F] {q : ℕ} [CharP F q] {ζ : F}
+    (hζ : orderOf ζ = 3) (hq : groupScaleCollisionBound < q)
+    (pairs : List (Bool × Bool)) (h_len : pairs.length ≤ 63)
+    {δ : ℤ × ℤ} (hδ : StepIndex δ) :
+    ((((accIndex pairs).1 - δ.1 : ℤ) : F) * ζ + (((accIndex pairs).2 - δ.2 : ℤ) : F) ≠ 0) ∧
+    ((((accIndex pairs).1 + δ.1 : ℤ) : F) * ζ + (((accIndex pairs).2 + δ.2 : ℤ) : F) ≠ 0) ∧
+    (((2 * (accIndex pairs).1 + δ.1 : ℤ) : F) * ζ +
+      ((2 * (accIndex pairs).2 + δ.2 : ℤ) : F) ≠ 0) := by
+  obtain ⟨hu1, hu2, hv1, hv2⟩ := accIndex_bounds pairs
+  have hP1 : (1 : ℤ) ≤ 2 ^ pairs.length := one_le_pow₀ (by norm_num)
+  have hP : (2 : ℤ) ^ pairs.length ≤ 9223372036854775808 := by
+    calc (2 : ℤ) ^ pairs.length ≤ 2 ^ 63 :=
+          pow_le_pow_right₀ (by norm_num) h_len
+      _ = 9223372036854775808 := by norm_num
+  have h66 : (2 : ℤ) ^ 66 = 73786976294838206464 := by norm_num
+  rcases hδ with h | h | h | h <;> subst h <;>
+    refine ⟨combination_ne_zero hζ hq ?_ ?_ ?_,
+            combination_ne_zero hζ hq ?_ ?_ ?_,
+            combination_ne_zero hζ hq ?_ ?_ ?_⟩ <;>
+    simp only [h66, abs_le] <;>
+    omega
+
 end Ragu.Contrib.EndoscalarProof

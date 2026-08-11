@@ -131,6 +131,10 @@ impl<'dr, D: Driver<'dr>, G: Gadget<'dr, D>> Deref for Demoted<'dr, D, G> {
 
 impl<'dr, D: Driver<'dr>, G: Gadget<'dr, D>> Demoted<'dr, D, G> {
     /// Strips a gadget of its witness data and returns a demoted version of it.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from the underlying wire remapping operation.
     pub fn new(gadget: &G) -> Result<Self> {
         Ok(Demoted {
             gadget: CloneWires::<_, DemotedDriver<D>>::remap(gadget)?,

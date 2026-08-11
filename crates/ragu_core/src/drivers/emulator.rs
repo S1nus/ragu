@@ -181,6 +181,11 @@ pub struct Emulator<M: Mode>(PhantomData<M>);
 impl<F: Field> Emulator<Wired<F>> {
     /// Extract the wires from a gadget produced using a wired [`Emulator`].
     /// This method returns the actual wire assignments if successful.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from remapping the gadget's wires into the output
+    /// vector.
     pub fn wires<'dr, G: Gadget<'dr, Self>>(&self, gadget: &G) -> Result<Vec<F>> {
         /// A conversion utility for extracting wire values.
         struct WireExtractor<F: Field> {

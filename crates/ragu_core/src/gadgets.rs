@@ -156,6 +156,10 @@ pub trait Gadget<'dr, D: Driver<'dr>>: Clone {
     type Kind: GadgetKind<D::F, Rebind<'dr, D> = Self>;
 
     /// Proxy for [`GadgetKind::map_gadget`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`GadgetKind::map_gadget`].
     fn map<'dst, WM: WireMap<D::F, Src = D, Dst: Driver<'dst, F = D::F>>>(
         &self,
         wm: &mut WM,

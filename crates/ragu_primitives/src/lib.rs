@@ -74,6 +74,10 @@ pub trait GadgetExt<'dr, D: Driver<'dr>>: Gadget<'dr, D> {
 
     /// Write this gadget into a buffer, assuming the gadget's
     /// [`Kind`](Gadget::Kind) implements [`Write`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Write::write_gadget`].
     fn write<B: Buffer<'dr, D>>(&self, dr: &mut D, buf: &mut B) -> Result<()>
     where
         Self::Kind: Write<D::F>,

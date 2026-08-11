@@ -67,6 +67,10 @@ impl<'dr, D: Driver<'dr>> Element<'dr, D> {
     /// provided [`Allocator`] to create the underlying wire.
     ///
     /// This costs one allocation.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from the provided [`Allocator`].
     pub fn alloc<A: Allocator<'dr, D>>(
         dr: &mut D,
         allocator: &mut A,

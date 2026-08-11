@@ -325,6 +325,10 @@ impl<F: Field, R: Rank, S: MultiStageCircuit<F, R>> MultiStage<F, R, S> {
     }
 
     /// Proxy for [`S::Last::final_mask`](StageExt::final_mask).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`StageExt::final_mask`].
     pub fn final_mask<'a>(&self) -> Result<BondingObject<'a, F, R>> {
         S::Last::final_mask()
     }

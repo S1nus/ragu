@@ -74,6 +74,12 @@ where
     /// [`Driver::constant`]: ragu_core::drivers::Driver::constant
     /// [`Driver::enforce_zero`]: ragu_core::drivers::Driver::enforce_zero
     /// [`Driver::ONE`]: ragu_core::drivers::Driver::ONE
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ragu_core::Error::InvalidWitness`] if the circuit violates
+    /// the bonding restrictions, or propagates any error from the standard
+    /// wiring-object construction pipeline.
     pub fn into_bonding_object<'a>(self) -> Result<BondingObject<'a, F, R>>
     where
         Self: 'a,

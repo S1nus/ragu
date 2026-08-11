@@ -478,6 +478,11 @@ impl<F: FromUniformBytes<64>> WireMap<F> for Counter<F> {
 }
 
 /// Evaluates the constraint topology of a circuit.
+///
+/// # Errors
+///
+/// Propagates any error from the raw orchestration pass used to analyze the
+/// circuit.
 pub fn eval<F: FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> Result<CircuitMetrics> {
     eval_raw(&super::raw::CircuitAdapterRef(circuit))
 }

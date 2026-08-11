@@ -1,5 +1,12 @@
 # Polynomial Management
 
+Ragu's prover works primarily with polynomials: constructing them from
+circuit descriptions, multiplying them via FFTs, and decomposing their
+products into forms the verifier can check. This chapter covers the
+wiring polynomial that encodes an arithmetic circuit, the synthesis
+process that builds it incrementally, and the low-level polynomial
+utilities in [`ragu_arithmetic`] that support these operations.
+
 ## Wiring Polynomials
 
 Individual arithmetic circuits are defined by the
@@ -53,3 +60,37 @@ $X^i Y^j$.
 
 [gate]: ../protocol/core/arithmetization.md#gates
 
+## Polynomial Arithmetic
+
+The synthesis machinery above relies on standard polynomial operations
+provided by the [`ragu_arithmetic`] crate. These operate on coefficient
+vectors in ascending
+degree order: the slice $[c_0, c_1, \ldots, c_n]$ represents the
+polynomial
+$c_0 + c_1 X + \cdots + c_n X^n$.
+
+### Evaluation and Inner Products
+
+[`eval`] evaluates a polynomial at a point using Horner's method.
+[`dot`] computes the inner product $\langle \v{a}, \v{b} \rangle$ of
+two equal-length coefficient vectors. These helpers provide the scalar
+operations underlying polynomial evaluation and inner-product checks.
+
+### Polynomial Multiplication
+
+[`poly_mul`] computes the coefficient convolution of two polynomials,
+implemented using FFTs. Given polynomials $a(X)$ of degree $d_a$ and
+$b(X)$ of degree $d_b$, it produces $c(X) = a(X) \cdot b(X)$ of degree
+$d_a + d_b$. Internally, both inputs are zero-padded to a power-of-two
+length, transformed into evaluation form via [`Domain::fft`], multiplied
+pointwise, and transformed back via [`Domain::ifft`].
+
+The output is written into a caller-supplied `&mut Vec<F>` so that
+repeated multiplications can reuse a single allocation.
+
+[`ragu_arithmetic`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/
+[`eval`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/fn.eval.html
+[`dot`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/fn.dot.html
+[`poly_mul`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/fn.poly_mul.html
+[`Domain::fft`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/struct.Domain.html#method.fft
+[`Domain::ifft`]: https://docs.rs/ragu_arithmetic/latest/ragu_arithmetic/struct.Domain.html#method.ifft

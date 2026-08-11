@@ -169,6 +169,10 @@ pub trait CircuitExt<F: Field>: Circuit<F> {
     ///
     /// The returned [`Trace`] can be assembled into a polynomial
     /// via [`Registry::assemble`](registry::Registry::assemble).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from evaluating the circuit trace.
     fn trace<'witness>(
         &self,
         witness: Self::Witness<'witness>,
@@ -178,6 +182,10 @@ pub trait CircuitExt<F: Field>: Circuit<F> {
 
     /// Evaluates the instance polynomial $k(y)$ for the given instance at
     /// a point $y \in \mathbb{F}$.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from evaluating the instance polynomial.
     fn ky(&self, instance: Self::Instance<'_>, y: F) -> Result<F> {
         ky::eval(self, instance, y)
     }

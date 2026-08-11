@@ -120,6 +120,11 @@ impl<'params, F: FromUniformBytes<64>, R: Rank> RegistryBuilder<'params, F, R> {
     }
 
     /// Registers an application step circuit.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from converting `circuit` into the registry's
+    /// internal wiring representation.
     pub fn register_circuit<C>(mut self, circuit: C) -> Result<Self>
     where
         C: Circuit<F> + 'params,
@@ -130,6 +135,11 @@ impl<'params, F: FromUniformBytes<64>, R: Rank> RegistryBuilder<'params, F, R> {
     }
 
     /// Registers an internal circuit.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from converting `circuit` into the registry's
+    /// internal wiring representation.
     pub fn register_internal_circuit<C>(mut self, circuit: C) -> Result<Self>
     where
         C: Circuit<F> + 'params,
@@ -140,6 +150,11 @@ impl<'params, F: FromUniformBytes<64>, R: Rank> RegistryBuilder<'params, F, R> {
     }
 
     /// Registers an internal step circuit.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from converting `circuit` into the registry's
+    /// internal wiring representation.
     pub fn register_internal_step<C>(mut self, circuit: C) -> Result<Self>
     where
         C: Circuit<F> + 'params,
@@ -165,6 +180,11 @@ impl<'params, F: FromUniformBytes<64>, R: Rank> RegistryBuilder<'params, F, R> {
     ///
     /// This concatenation order must match `InternalCircuitIndex::ALL` in
     /// `ragu_pcd`, which derives [`CircuitIndex`] from position in the array.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CircuitBoundExceeded`] if the total number of
+    /// registered circuits exceeds the rank capacity.
     pub fn finalize(self) -> Result<Registry<'params, F, R>>
     where
         F: FromUniformBytes<64>,
@@ -356,6 +376,10 @@ impl<F: PrimeField, R: Rank> Registry<'_, F, R> {
     ///
     /// Calls [`assemble_with_alpha`](Self::assemble_with_alpha) with a
     /// random value sampled from `rng`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`Registry::assemble_with_alpha`].
     pub fn assemble(
         &self,
         trace: &crate::trace::Trace<F>,
@@ -373,6 +397,11 @@ impl<F: PrimeField, R: Rank> Registry<'_, F, R> {
     /// all-zero (the ONE wire at `d[0] = 1` ensures this), but the
     /// predictable ONE slot can cancel in linear combinations of traces;
     /// a random `alpha` at `a[0]` keeps derived polynomials non-zero.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from assembling the trace against the stored
+    /// floor plan.
     pub fn assemble_with_alpha(
         &self,
         trace: &crate::trace::Trace<F>,

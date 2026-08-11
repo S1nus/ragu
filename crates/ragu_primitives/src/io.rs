@@ -51,6 +51,11 @@ pub trait Write<F: Field>: GadgetKind<F> {
 /// provided driver context.
 pub trait Buffer<'dr, D: Driver<'dr>> {
     /// Push an `Element` into this buffer using the provided driver `D`.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error encountered while accepting `value` into this
+    /// buffer.
     fn write(&mut self, dr: &mut D, value: &Element<'dr, D>) -> Result<()>;
 }
 

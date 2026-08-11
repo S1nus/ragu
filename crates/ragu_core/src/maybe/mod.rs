@@ -98,6 +98,11 @@ pub trait Maybe<T: Send>: sealed::Sealed + Send {
     /// Creates a new value of this `Maybe<T>` given a fallible closure. Similar
     /// to `just` the provided closure is not called if the concrete type does
     /// not represent an existing value.
+    ///
+    /// # Errors
+    ///
+    /// If this `Maybe<T>` kind represents existing values, returns any error
+    /// produced by `f`.
     fn try_just<R: Send, E>(f: impl FnOnce() -> Result<R, E>) -> Result<Perhaps<Self::Kind, R>, E>;
 
     /// In contexts where the `Maybe<T>` is known or guaranteed to be an
@@ -170,6 +175,11 @@ pub trait MaybeKind: sealed::Sealed {
     }
 
     /// Proxy for the associated [`Maybe<T>::try_just`] method.
+    ///
+    /// # Errors
+    ///
+    /// If this kind represents existing values, returns any error produced by
+    /// `f`.
     fn maybe_try_just<R: Send, E>(f: impl FnOnce() -> Result<R, E>) -> Result<Self::Rebind<R>, E> {
         Self::Rebind::<R>::try_just(f)
     }

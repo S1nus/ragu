@@ -44,6 +44,11 @@ pub trait Allocator<'dr, D: Driver<'dr>> {
     /// The closure follows the same purity contract as [`Driver::mul`]:
     /// it may be called zero or more times, it must be side-effect-free,
     /// and errors returned from it propagate to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced by `value`, or any error from the driver
+    /// while allocating the wire.
     fn alloc(&mut self, dr: &mut D, value: impl Fn() -> Result<Coeff<D::F>>) -> Result<D::Wire>;
 
     /// Accepts a spare [`Extra`](ragu_core::drivers::DriverTypes::Extra)
